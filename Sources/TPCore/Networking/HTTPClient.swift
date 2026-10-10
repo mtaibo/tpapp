@@ -19,18 +19,79 @@ public struct HTTPClient: Sendable {
         self.encoder = encoder
     }
 
-    public func get<Response: Decodable>(_ path: String) async throws -> Response {
-        let data = try await execute(path: path, method: "GET", body: Optional<EmptyBody>.none)
+    public func get<Response: Decodable>(_ path: String, query: [String: String] = [:]) async throws -> Response {
+        let data = try await execute(path: path, method: "GET", query: query, body: Optional<EmptyBody>.none)
         return try decode(data)
     }
 
-    public func post<Body: Encodable, Response: Decodable>(_ path: String, body: Body) async throws -> Response {
-        let data = try await execute(path: path, method: "POST", body: body)
+    public func post<Body: Encodable, Response: Decodable>(_ path: String, query: [String: String] = [:], body: Body) async throws -> Response {
+        let data = try await execute(path: path, method: "POST", query: query, body: body)
         return try decode(data)
     }
 
     public func post(_ path: String) async throws {
-        _ = try await execute(path: path, method: "POST", body: Optional<EmptyBody>.none)
+        _ = try await execute(path: path, method: "POST", query: [:], body: Optional<EmptyBody>.none)
+    }
+
+    public func post<Response: Decodable>(_ path: String, query: [String: String] = [:]) async throws -> Response {
+        let data = try await execute(path: path, method: "POST", query: query, body: Optional<EmptyBody>.none)
+        return try decode(data)
+    }
+
+    public func patch<Body: Encodable, Response: Decodable>(_ path: String, body: Body) async throws -> Response {
+        let data = try await execute(path: path, method: "PATCH", query: [:], body: body)
+        return try decode(data)
+    }
+
+    public func delete<Response: Decodable>(_ path: String, query: [String: String] = [:]) async throws -> Response {
+        let data = try await execute(path: path, method: "DELETE", query: query, body: Optional<EmptyBody>.none)
+        return try decode(data)
+    }
+
+    public func delete<Body: Encodable, Response: Decodable>(_ path: String, body: Body) async throws -> Response {
+        let data = try await execute(path: path, method: "DELETE", query: [:], body: body)
+        return try decode(data)
+    }
+
+    /// Raw binary GET for responses that aren't JSON, e.g. file downloads.
+    public func getData(_ path: String, query: [String: String] = [:]) async throws -> Data {
+        try await execute(path: path, method: "GET", query: query, body: Optional<EmptyBody>.none)
+    }
+
+    public struct UploadFile: Sendable {
+        public let fieldName: String
+        public let filename: String
+        public let mimeType: String
+        public let data: Data
+
+        public init(fieldName: String = "files", filename: String, mimeType: String = "application/octet-stream", data: Data) {
+            self.fieldName = fieldName
+            self.filename = filename
+            self.mimeType = mimeType
+            self.data = data
+        }
+    }
+
+    public func upload<Response: Decodable>(_ path: String, query: [String: String] = [:], files: [UploadFile]) async throws -> Response {
+        let boundary = "Boundary-\(UUID().uuidString)"
+        var body = Data()
+        for file in files {
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"\(file.fieldName)\"; filename=\"\(file.filename)\"\r\n".data(using: .utf8)!)
+            body.append("Content-Type: \(file.mimeType)\r\n\r\n".data(using: .utf8)!)
+            body.append(file.data)
+            body.append("\r\n".data(using: .utf8)!)
+        }
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+
+        let data = try await executeRaw(
+            path: path,
+            method: "POST",
+            query: query,
+            contentType: "multipart/form-data; boundary=\(boundary)",
+            body: body
+        )
+        return try decode(data)
     }
 
     private func decode<Response: Decodable>(_ data: Data) throws -> Response {
@@ -41,13 +102,28 @@ public struct HTTPClient: Sendable {
         }
     }
 
-    private func execute<Body: Encodable>(path: String, method: String, body: Body?) async throws -> Data {
-        var request = URLRequest(url: baseURL.appending(path: path))
+    private func execute<Body: Encodable>(path: String, method: String, query: [String: String], body: Body?) async throws -> Data {
+        let encodedBody = try body.map { try encoder.encode($0) }
+        return try await executeRaw(
+            path: path,
+            method: method,
+            query: query,
+            contentType: encodedBody == nil ? nil : "application/json",
+            body: encodedBody
+        )
+    }
+
+    private func executeRaw(path: String, method: String, query: [String: String], contentType: String?, body: Data?) async throws -> Data {
+        var components = URLComponents(url: baseURL.appending(path: path), resolvingAgainstBaseURL: false)!
+        if !query.isEmpty {
+            components.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) }
+        }
+        var request = URLRequest(url: components.url!)
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        if let body {
-            request.httpBody = try encoder.encode(body)
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = body
+        if let contentType {
+            request.setValue(contentType, forHTTPHeaderField: "Content-Type")
         }
 
         let data: Data

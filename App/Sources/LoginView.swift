@@ -161,7 +161,7 @@ struct LoginView: View {
         do {
             try await session.login(email: email, password: password)
         } catch {
-            errorMessage = Self.message(for: error)
+            errorMessage = apiErrorMessage(error)
         }
     }
 
@@ -172,16 +172,7 @@ struct LoginView: View {
         do {
             try await session.verifyTOTP(code)
         } catch {
-            errorMessage = Self.message(for: error)
-        }
-    }
-
-    private static func message(for error: Error) -> String {
-        guard let apiError = error as? APIError else { return "Error inesperado" }
-        switch apiError {
-        case .server(_, let detail): return detail ?? "Error inesperado"
-        case .transport: return "No se pudo conectar"
-        case .decoding, .invalidResponse: return "Error inesperado"
+            errorMessage = apiErrorMessage(error)
         }
     }
 }
