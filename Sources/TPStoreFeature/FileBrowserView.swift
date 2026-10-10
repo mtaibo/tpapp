@@ -34,6 +34,8 @@ public struct FileBrowserView: View {
     @State private var downloadDocument: RawFileDocument?
     @State private var downloadFilename = ""
 
+    @State private var topBarHeight: CGFloat = 70
+
     public init(storeClient: StoreClient, rootPath: String = "") {
         self.storeClient = storeClient
         self.rootPath = rootPath
@@ -42,13 +44,10 @@ public struct FileBrowserView: View {
     }
 
     public var body: some View {
-        ZStack {
+        ZStack(alignment: .top) {
             TPStoreTheme.background.ignoresSafeArea()
-            VStack(spacing: 0) {
-                toolbar
-                content
-                bottomBar
-            }
+            content
+            toolbar
         }
         #if os(macOS)
         .frame(minWidth: 640, minHeight: 540)
@@ -111,6 +110,12 @@ public struct FileBrowserView: View {
             HStack(spacing: 10) {
                 navigationPill
                 Spacer()
+                Text(currentFolderTitle)
+                    .font(.system(size: 13.6, weight: .medium))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer()
                 Button {
                     isGalleryView.toggle()
                 } label: {
@@ -120,6 +125,10 @@ public struct FileBrowserView: View {
                 .glassEffect(.regular, in: .circle)
 
                 Menu {
+                    if let disk {
+                        Text("\(formatBytes(disk.used)) of \(formatBytes(disk.total)) used")
+                        Divider()
+                    }
                     Button {
                         newFolderName = ""
                         isCreatingFolder = true
@@ -146,6 +155,16 @@ public struct FileBrowserView: View {
             .padding(.horizontal, 20)
             .padding(.vertical, 14)
         }
+        .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { newHeight in
+            topBarHeight = newHeight
+        }
+    }
+
+    private var currentFolderTitle: String {
+        if path == rootPath {
+            return rootPath.isEmpty ? "Store" : "Home"
+        }
+        return path.split(separator: "/").last.map(String.init) ?? path
     }
 
     private var navigationPill: some View {
@@ -157,87 +176,30 @@ public struct FileBrowserView: View {
         )
     }
 
-    // MARK: - Bottom bar
-
-    private var bottomBar: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Rectangle().fill(Color.white.opacity(0.05)).frame(height: 0.5)
-            VStack(alignment: .leading, spacing: 8) {
-                breadcrumb
-                if let disk {
-                    diskUsageBar(disk)
-                }
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
-        }
-    }
-
-    private var breadcrumb: some View {
-        let rootSegmentCount = rootPath.split(separator: "/").count
-        let segments = path.split(separator: "/").map(String.init)
-        let relativeSegments = Array(segments.dropFirst(rootSegmentCount))
-        return HStack(spacing: 4) {
-            breadcrumbButton(title: rootPath.isEmpty ? "Store" : "Home", targetPath: rootPath)
-            ForEach(Array(relativeSegments.enumerated()), id: \.offset) { index, segment in
-                Text("\u{203A}")
-                    .font(.system(size: 13.6))
-                    .foregroundStyle(TPStoreTheme.breadcrumbSeparator)
-                breadcrumbButton(title: segment, targetPath: segments[0...(rootSegmentCount + index)].joined(separator: "/"))
-            }
-        }
-    }
-
-    private func breadcrumbButton(title: String, targetPath: String) -> some View {
-        Button {
-            navigate(to: targetPath)
-        } label: {
-            Text(title)
-                .font(.system(size: 13.6, weight: .medium))
-                .foregroundStyle(targetPath == path ? .white : TPStoreTheme.breadcrumbMuted)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: 128, alignment: .leading)
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func diskUsageBar(_ disk: DiskInfo) -> some View {
-        let fraction = disk.total > 0 ? Double(disk.used) / Double(disk.total) : 0
-        return VStack(alignment: .leading, spacing: 4) {
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Color.white.opacity(0.08))
-                    Capsule().fill(Color.white.opacity(0.35))
-                        .frame(width: geo.size.width * fraction)
-                }
-            }
-            .frame(height: 4)
-
-            Text("\(formatBytes(disk.used)) of \(formatBytes(disk.total)) used")
-                .font(.system(size: 11))
-                .foregroundStyle(TPStoreTheme.textMuted)
-        }
-    }
-
     // MARK: - Content
 
     @ViewBuilder
     private var content: some View {
         if isLoading {
-            Spacer()
-            ProgressView().tint(.white)
-            Spacer()
+            VStack {
+                Spacer()
+                ProgressView().tint(.white)
+                Spacer()
+            }
         } else if let loadError {
-            Spacer()
-            Text(loadError).foregroundStyle(TPStoreTheme.danger)
-            Spacer()
+            VStack {
+                Spacer()
+                Text(loadError).foregroundStyle(TPStoreTheme.danger)
+                Spacer()
+            }
         } else if entries.isEmpty {
-            Spacer()
-            Text("Empty folder")
-                .font(.system(size: 14))
-                .foregroundStyle(TPStoreTheme.textMuted)
-            Spacer()
+            VStack {
+                Spacer()
+                Text("Empty folder")
+                    .font(.system(size: 14))
+                    .foregroundStyle(TPStoreTheme.textMuted)
+                Spacer()
+            }
         } else if isGalleryView {
             galleryContent
         } else {
@@ -248,6 +210,7 @@ public struct FileBrowserView: View {
     private var listContent: some View {
         ScrollView {
             VStack(spacing: 0) {
+                Color.clear.frame(height: topBarHeight)
                 listHeader
                 ForEach(entries) { entry in
                     entryRow(entry)
@@ -276,13 +239,16 @@ public struct FileBrowserView: View {
 
     private var galleryContent: some View {
         ScrollView {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: 12)], spacing: 12) {
-                ForEach(entries) { entry in
-                    galleryTile(entry)
+            VStack(spacing: 0) {
+                Color.clear.frame(height: topBarHeight)
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: 12)], spacing: 12) {
+                    ForEach(entries) { entry in
+                        galleryTile(entry)
+                    }
                 }
+                .padding(16)
+                .padding(.horizontal, 4)
             }
-            .padding(16)
-            .padding(.horizontal, 4)
         }
     }
 

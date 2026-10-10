@@ -15,18 +15,17 @@ public struct SharedView: View {
     @State private var isLoading = true
     @State private var loadError: String?
     @State private var copiedToken: String?
+    @State private var topBarHeight: CGFloat = 70
 
     public init(storeClient: StoreClient) {
         self.storeClient = storeClient
     }
 
     public var body: some View {
-        ZStack {
+        ZStack(alignment: .top) {
             TPStoreTheme.background.ignoresSafeArea()
-            VStack(spacing: 0) {
-                toolbar
-                content
-            }
+            content
+            toolbar
         }
         #if os(macOS)
         .frame(minWidth: 640, minHeight: 540)
@@ -40,7 +39,12 @@ public struct SharedView: View {
         GlassEffectContainer(spacing: 10) {
             HStack(spacing: 10) {
                 navigationPill
-                breadcrumb
+                Spacer()
+                Text(currentFolderTitle)
+                    .font(.system(size: 13.6, weight: .medium))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
                 Spacer()
                 Button {
                     Task { await load() }
@@ -53,6 +57,13 @@ public struct SharedView: View {
             .padding(.horizontal, 20)
             .padding(.vertical, 14)
         }
+        .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { newHeight in
+            topBarHeight = newHeight
+        }
+    }
+
+    private var currentFolderTitle: String {
+        path == Self.rootPath ? "Shared" : (path.split(separator: "/").last.map(String.init) ?? path)
     }
 
     private var navigationPill: some View {
@@ -64,55 +75,34 @@ public struct SharedView: View {
         )
     }
 
-    private var breadcrumb: some View {
-        let segments = path.split(separator: "/").map(String.init)
-        let relativeSegments = Array(segments.dropFirst(1))
-        return HStack(spacing: 4) {
-            breadcrumbButton(title: "Shared", targetPath: Self.rootPath)
-            ForEach(Array(relativeSegments.enumerated()), id: \.offset) { index, segment in
-                Text("\u{203A}")
-                    .font(.system(size: 13.6))
-                    .foregroundStyle(TPStoreTheme.breadcrumbSeparator)
-                breadcrumbButton(title: segment, targetPath: segments[0...(index + 1)].joined(separator: "/"))
-            }
-        }
-    }
-
-    private func breadcrumbButton(title: String, targetPath: String) -> some View {
-        Button {
-            navigate(to: targetPath)
-        } label: {
-            Text(title)
-                .font(.system(size: 13.6, weight: .medium))
-                .foregroundStyle(targetPath == path ? .white : TPStoreTheme.breadcrumbMuted)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(maxWidth: 128, alignment: .leading)
-        }
-        .buttonStyle(.plain)
-    }
-
     // MARK: - Content
 
     @ViewBuilder
     private var content: some View {
         if isLoading {
-            Spacer()
-            ProgressView().tint(.white)
-            Spacer()
+            VStack {
+                Spacer()
+                ProgressView().tint(.white)
+                Spacer()
+            }
         } else if let loadError {
-            Spacer()
-            Text(loadError).foregroundStyle(TPStoreTheme.danger)
-            Spacer()
+            VStack {
+                Spacer()
+                Text(loadError).foregroundStyle(TPStoreTheme.danger)
+                Spacer()
+            }
         } else if shares.isEmpty && entries.isEmpty {
-            Spacer()
-            Text(path == Self.rootPath ? "No shared folders or links yet" : "Empty folder")
-                .font(.system(size: 14))
-                .foregroundStyle(TPStoreTheme.textMuted)
-            Spacer()
+            VStack {
+                Spacer()
+                Text(path == Self.rootPath ? "No shared folders or links yet" : "Empty folder")
+                    .font(.system(size: 14))
+                    .foregroundStyle(TPStoreTheme.textMuted)
+                Spacer()
+            }
         } else {
             ScrollView {
                 VStack(spacing: 0) {
+                    Color.clear.frame(height: topBarHeight)
                     if !shares.isEmpty {
                         sectionHeader("Links")
                         ForEach(shares) { share in
