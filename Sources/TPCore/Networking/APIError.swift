@@ -11,7 +11,7 @@ public extension APIError {
     var displayMessage: String {
         switch self {
         case .server(_, let detail): return detail ?? "Error inesperado"
-        case .transport: return "No se pudo conectar"
+        case .transport(let description): return "No se pudo conectar: \(description)"
         case .decoding, .invalidResponse: return "Error inesperado"
         }
     }
