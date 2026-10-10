@@ -2,7 +2,8 @@ import Foundation
 @testable import TPCore
 
 final class StubURLProtocol: URLProtocol {
-    static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+    /// Serialized tests guarantee exclusive access; see TPCoreTestsRoot.
+    nonisolated(unsafe) static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -54,8 +55,8 @@ func requestBody(_ request: URLRequest) -> Data? {
 }
 
 final class FakeSessionCookieStore: SessionCookieStore {
-    var hasSessionCookie: Bool
-    private(set) var clearCallCount = 0
+    nonisolated(unsafe) var hasSessionCookie: Bool
+    private(set) nonisolated(unsafe) var clearCallCount = 0
 
     init(hasSessionCookie: Bool = false) {
         self.hasSessionCookie = hasSessionCookie

@@ -44,6 +44,11 @@ public final class AuthSession: ObservableObject {
         }
     }
 
+    /// Returns from the TOTP step to the password step without contacting the server, mirroring the web login's "Back" button.
+    public func cancelTOTP() {
+        state = .signedOut
+    }
+
     public func verifyTOTP(_ code: String) async throws {
         try await authenticator.verifyTOTP(code: code)
         state = .signedIn(try await authenticator.currentProfile())

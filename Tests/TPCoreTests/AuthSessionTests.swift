@@ -35,6 +35,22 @@ extension TPCoreTestsRoot {
         #expect(session.state == .totpRequired(email: "a@b.com"))
     }
 
+    @Test func cancelTOTPReturnsToSignedOutWithoutNetworkCall() async throws {
+        StubURLProtocol.handler = { request in
+            if request.url?.path == "/auth/password/login" {
+                return jsonResponse(request.url!, status: 200, json: #"{"totp_required": true}"#)
+            }
+            Issue.record("should not make a network call when cancelling TOTP")
+            throw URLError(.unknown)
+        }
+        let session = AuthSession(authenticator: makeAuthenticator(), cookieStore: FakeSessionCookieStore())
+        try await session.login(email: "a@b.com", password: "secret")
+
+        session.cancelTOTP()
+
+        #expect(session.state == .signedOut)
+    }
+
     @Test func verifyTOTPCompletesSignIn() async throws {
         StubURLProtocol.handler = { request in
             if request.url?.path == "/auth/password/totp/verify" {
