@@ -1,0 +1,76 @@
+name: TPApp
+options:
+  bundleIdPrefix: com.migueltaibo
+  deploymentTarget:
+    iOS: "17.0"
+    macOS: "14.0"
+
+packages:
+  tpapp:
+    path: ..
+
+targets:
+  TPApp-iOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+    configFiles:
+      Debug: Config/Shared.xcconfig
+      Release: Config/Shared.xcconfig
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.migueltaibo.tpapp
+        INFOPLIST_FILE: Sources/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+    dependencies:
+      - package: tpapp
+        product: TPCore
+      - package: tpapp
+        product: TPCloudFeature
+      - package: tpapp
+        product: TPStoreFeature
+      - package: tpapp
+        product: TPHomeFeature
+
+  TPApp-macOS:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources
+    configFiles:
+      Debug: Config/Shared.xcconfig
+      Release: Config/Shared.xcconfig
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.migueltaibo.tpapp
+        INFOPLIST_FILE: Sources/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        COMBINE_HIDPI_IMAGES: YES
+    dependencies:
+      - package: tpapp
+        product: TPCore
+      - package: tpapp
+        product: TPCloudFeature
+      - package: tpapp
+        product: TPStoreFeature
+      - package: tpapp
+        product: TPHomeFeature
+
+schemes:
+  TPApp-iOS:
+    build:
+      targets:
+        TPApp-iOS: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+  TPApp-macOS:
+    build:
+      targets:
+        TPApp-macOS: all
+    run:
+      config: Debug
+    test:
+      config: Debug
