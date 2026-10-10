@@ -13,10 +13,12 @@ struct RootView: View {
             switch session.state {
             case .signedOut, .totpRequired:
                 LoginView(session: session)
-            case .signedIn:
+            case .signedIn(let profile):
                 TabView {
-                    FileBrowserView(storeClient: storeClient)
+                    FileBrowserView(storeClient: storeClient, rootPath: "users/\(profile.email)")
                         .tabItem { Label("Store", systemImage: "folder.fill") }
+                    SharedView(storeClient: storeClient)
+                        .tabItem { Label("Shared", systemImage: "link") }
                     AccountView(session: session, accountClient: accountClient)
                         .tabItem { Label("Account", systemImage: "person.crop.circle") }
                 }

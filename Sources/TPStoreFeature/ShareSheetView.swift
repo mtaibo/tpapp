@@ -331,7 +331,7 @@ struct ShareSheetView: View {
     }
 }
 
-private func copyToClipboard(_ string: String) {
+func copyToClipboard(_ string: String) {
     #if os(macOS)
     NSPasteboard.general.clearContents()
     NSPasteboard.general.setString(string, forType: .string)

@@ -5,10 +5,11 @@ import UniformTypeIdentifiers
 
 public struct FileBrowserView: View {
     let storeClient: StoreClient
+    let rootPath: String
 
     @State private var location: StoreLocation = .external
-    @State private var path = ""
-    @State private var history: [String] = [""]
+    @State private var path: String
+    @State private var history: [String]
     @State private var historyIndex = 0
 
     @State private var entries: [FileEntry] = []
@@ -33,8 +34,11 @@ public struct FileBrowserView: View {
     @State private var downloadDocument: RawFileDocument?
     @State private var downloadFilename = ""
 
-    public init(storeClient: StoreClient) {
+    public init(storeClient: StoreClient, rootPath: String = "") {
         self.storeClient = storeClient
+        self.rootPath = rootPath
+        _path = State(initialValue: rootPath)
+        _history = State(initialValue: [rootPath])
     }
 
     public var body: some View {
@@ -103,81 +107,54 @@ public struct FileBrowserView: View {
     // MARK: - Toolbar
 
     private var toolbar: some View {
-        HStack(spacing: 10) {
-            navigationPill
-            Spacer()
-            toolbarCircleButton(systemImage: isGalleryView ? "list.bullet" : "square.grid.2x2") {
-                isGalleryView.toggle()
+        GlassEffectContainer(spacing: 10) {
+            HStack(spacing: 10) {
+                navigationPill
+                Spacer()
+                Button {
+                    isGalleryView.toggle()
+                } label: {
+                    toolbarIcon(isGalleryView ? "list.bullet" : "square.grid.2x2")
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular, in: .circle)
+
+                Menu {
+                    Button {
+                        newFolderName = ""
+                        isCreatingFolder = true
+                    } label: {
+                        Label("New folder", systemImage: "folder.badge.plus")
+                    }
+                    Button {
+                        isImportingFile = true
+                    } label: {
+                        Label("Upload", systemImage: "arrow.up.circle")
+                    }
+                    Button {
+                        Task { await load() }
+                    } label: {
+                        Label("Refresh", systemImage: "arrow.clockwise")
+                    }
+                } label: {
+                    toolbarIcon("ellipsis")
+                }
+                .menuIndicator(.hidden)
+                .buttonStyle(.plain)
+                .glassEffect(.regular, in: .circle)
             }
-            Menu {
-                Button {
-                    newFolderName = ""
-                    isCreatingFolder = true
-                } label: {
-                    Label("New folder", systemImage: "folder.badge.plus")
-                }
-                Button {
-                    isImportingFile = true
-                } label: {
-                    Label("Upload", systemImage: "arrow.up.circle")
-                }
-                Button {
-                    Task { await load() }
-                } label: {
-                    Label("Refresh", systemImage: "arrow.clockwise")
-                }
-            } label: {
-                toolbarCircleLabel(systemImage: "ellipsis")
-            }
-            .menuIndicator(.hidden)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 14)
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
     }
 
     private var navigationPill: some View {
-        HStack(spacing: 0) {
-            pillButton(systemImage: "chevron.left", enabled: historyIndex > 0) { goBack() }
-            Rectangle()
-                .fill(Color.white.opacity(0.15))
-                .frame(width: 0.5, height: 14)
-            pillButton(systemImage: "chevron.right", enabled: historyIndex < history.count - 1) { goForward() }
-        }
-        .background {
-            Capsule()
-                .fill(Color.white.opacity(0.07))
-                .overlay(Capsule().strokeBorder(Color.white.opacity(0.12), lineWidth: 0.5))
-        }
-    }
-
-    private func pillButton(systemImage: String, enabled: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(enabled ? Color.white.opacity(0.85) : Color.white.opacity(0.2))
-                .frame(width: 40, height: 36)
-        }
-        .buttonStyle(.plain)
-        .disabled(!enabled)
-    }
-
-    private func toolbarCircleButton(systemImage: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            toolbarCircleLabel(systemImage: systemImage)
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func toolbarCircleLabel(systemImage: String) -> some View {
-        Image(systemName: systemImage)
-            .font(.system(size: 14, weight: .medium))
-            .foregroundStyle(Color.white.opacity(0.85))
-            .frame(width: 36, height: 36)
-            .background {
-                Circle()
-                    .fill(Color.white.opacity(0.07))
-                    .overlay(Circle().strokeBorder(Color.white.opacity(0.12), lineWidth: 0.5))
-            }
+        NavigationPill(
+            canGoBack: historyIndex > 0,
+            canGoForward: historyIndex < history.count - 1,
+            onBack: goBack,
+            onForward: goForward
+        )
     }
 
     // MARK: - Bottom bar
@@ -197,14 +174,16 @@ public struct FileBrowserView: View {
     }
 
     private var breadcrumb: some View {
+        let rootSegmentCount = rootPath.split(separator: "/").count
         let segments = path.split(separator: "/").map(String.init)
+        let relativeSegments = Array(segments.dropFirst(rootSegmentCount))
         return HStack(spacing: 4) {
-            breadcrumbButton(title: "Store", targetPath: "")
-            ForEach(Array(segments.enumerated()), id: \.offset) { index, segment in
+            breadcrumbButton(title: rootPath.isEmpty ? "Store" : "Home", targetPath: rootPath)
+            ForEach(Array(relativeSegments.enumerated()), id: \.offset) { index, segment in
                 Text("\u{203A}")
                     .font(.system(size: 13.6))
                     .foregroundStyle(TPStoreTheme.breadcrumbSeparator)
-                breadcrumbButton(title: segment, targetPath: segments[0...index].joined(separator: "/"))
+                breadcrumbButton(title: segment, targetPath: segments[0...(rootSegmentCount + index)].joined(separator: "/"))
             }
         }
     }
@@ -576,6 +555,39 @@ public struct FileBrowserView: View {
             return "application/octet-stream"
         }
         return mime
+    }
+}
+
+func toolbarIcon(_ systemImage: String, enabled: Bool = true) -> some View {
+    Image(systemName: systemImage)
+        .font(.system(size: 15, weight: .medium))
+        .foregroundStyle(enabled ? Color.white : Color.white.opacity(0.3))
+        .frame(width: 40, height: 40)
+}
+
+struct NavigationPill: View {
+    let canGoBack: Bool
+    let canGoForward: Bool
+    let onBack: () -> Void
+    let onForward: () -> Void
+
+    var body: some View {
+        HStack(spacing: 0) {
+            pillButton(systemImage: "chevron.left", enabled: canGoBack, action: onBack)
+            Rectangle()
+                .fill(Color.white.opacity(0.15))
+                .frame(width: 0.5, height: 16)
+            pillButton(systemImage: "chevron.right", enabled: canGoForward, action: onForward)
+        }
+        .glassEffect(.regular, in: .capsule)
+    }
+
+    private func pillButton(systemImage: String, enabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            toolbarIcon(systemImage, enabled: enabled)
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
     }
 }
 
