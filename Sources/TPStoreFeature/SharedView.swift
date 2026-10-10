@@ -5,6 +5,7 @@ public struct SharedView: View {
     private static let rootPath = "shared"
 
     let storeClient: StoreClient
+    let resetSignal: Int
 
     @State private var path = SharedView.rootPath
     @State private var history: [String] = [SharedView.rootPath]
@@ -17,8 +18,9 @@ public struct SharedView: View {
     @State private var copiedToken: String?
     @State private var topBarHeight: CGFloat = 70
 
-    public init(storeClient: StoreClient) {
+    public init(storeClient: StoreClient, resetSignal: Int = 0) {
         self.storeClient = storeClient
+        self.resetSignal = resetSignal
     }
 
     public var body: some View {
@@ -31,28 +33,39 @@ public struct SharedView: View {
         .frame(minWidth: 640, minHeight: 540)
         #endif
         .task { await load() }
+        .onChange(of: resetSignal) { _, _ in
+            resetToRoot()
+        }
     }
 
     // MARK: - Toolbar
 
     private var toolbar: some View {
         GlassEffectContainer(spacing: 10) {
-            HStack(spacing: 10) {
-                navigationPill
-                Spacer()
+            ZStack {
                 Text(currentFolderTitle)
-                    .font(.system(size: 13.6, weight: .medium))
+                    .font(.system(size: 16, weight: .medium))
                     .foregroundStyle(.white)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Spacer()
-                Button {
-                    Task { await load() }
-                } label: {
-                    toolbarIcon("arrow.clockwise")
+                    .frame(maxWidth: .infinity, alignment: .center)
+
+                HStack(spacing: 10) {
+                    navigationPill
+                    Spacer()
+                    Menu {
+                        Button {
+                            Task { await load() }
+                        } label: {
+                            Label("Refresh", systemImage: "arrow.clockwise")
+                        }
+                    } label: {
+                        toolbarIcon("ellipsis")
+                    }
+                    .menuIndicator(.hidden)
+                    .buttonStyle(.plain)
+                    .glassEffect(.regular, in: .circle)
                 }
-                .buttonStyle(.plain)
-                .glassEffect(.regular, in: .circle)
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 14)
@@ -249,6 +262,14 @@ public struct SharedView: View {
         guard historyIndex < history.count - 1 else { return }
         historyIndex += 1
         path = history[historyIndex]
+        Task { await load() }
+    }
+
+    private func resetToRoot() {
+        guard path != Self.rootPath else { return }
+        path = Self.rootPath
+        history = [Self.rootPath]
+        historyIndex = 0
         Task { await load() }
     }
 

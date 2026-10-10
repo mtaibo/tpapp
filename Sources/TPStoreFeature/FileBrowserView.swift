@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 public struct FileBrowserView: View {
     let storeClient: StoreClient
     let rootPath: String
+    let resetSignal: Int
 
     @State private var location: StoreLocation = .external
     @State private var path: String
@@ -36,9 +37,10 @@ public struct FileBrowserView: View {
 
     @State private var topBarHeight: CGFloat = 70
 
-    public init(storeClient: StoreClient, rootPath: String = "") {
+    public init(storeClient: StoreClient, rootPath: String = "", resetSignal: Int = 0) {
         self.storeClient = storeClient
         self.rootPath = rootPath
+        self.resetSignal = resetSignal
         _path = State(initialValue: rootPath)
         _history = State(initialValue: [rootPath])
     }
@@ -53,6 +55,9 @@ public struct FileBrowserView: View {
         .frame(minWidth: 640, minHeight: 540)
         #endif
         .task { await load() }
+        .onChange(of: resetSignal) { _, _ in
+            resetToRoot()
+        }
         .alert("New folder", isPresented: $isCreatingFolder) {
             TextField("Name", text: $newFolderName)
             Button("Create") { Task { await createFolder() } }
@@ -107,50 +112,50 @@ public struct FileBrowserView: View {
 
     private var toolbar: some View {
         GlassEffectContainer(spacing: 10) {
-            HStack(spacing: 10) {
-                navigationPill
-                Spacer()
+            ZStack {
                 Text(currentFolderTitle)
-                    .font(.system(size: 13.6, weight: .medium))
+                    .font(.system(size: 16, weight: .medium))
                     .foregroundStyle(.white)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Spacer()
-                Button {
-                    isGalleryView.toggle()
-                } label: {
-                    toolbarIcon(isGalleryView ? "list.bullet" : "square.grid.2x2")
-                }
-                .buttonStyle(.plain)
-                .glassEffect(.regular, in: .circle)
+                    .frame(maxWidth: .infinity, alignment: .center)
 
-                Menu {
-                    if let disk {
-                        Text("\(formatBytes(disk.used)) of \(formatBytes(disk.total)) used")
-                        Divider()
-                    }
-                    Button {
-                        newFolderName = ""
-                        isCreatingFolder = true
+                HStack(spacing: 10) {
+                    navigationPill
+                    Spacer()
+                    Menu {
+                        if let disk {
+                            Text("\(formatBytes(disk.used)) of \(formatBytes(disk.total)) used")
+                            Divider()
+                        }
+                        Button {
+                            isGalleryView.toggle()
+                        } label: {
+                            Label(isGalleryView ? "List view" : "Gallery view", systemImage: isGalleryView ? "list.bullet" : "square.grid.2x2")
+                        }
+                        Button {
+                            newFolderName = ""
+                            isCreatingFolder = true
+                        } label: {
+                            Label("New folder", systemImage: "folder.badge.plus")
+                        }
+                        Button {
+                            isImportingFile = true
+                        } label: {
+                            Label("Upload", systemImage: "arrow.up.circle")
+                        }
+                        Button {
+                            Task { await load() }
+                        } label: {
+                            Label("Refresh", systemImage: "arrow.clockwise")
+                        }
                     } label: {
-                        Label("New folder", systemImage: "folder.badge.plus")
+                        toolbarIcon("ellipsis")
                     }
-                    Button {
-                        isImportingFile = true
-                    } label: {
-                        Label("Upload", systemImage: "arrow.up.circle")
-                    }
-                    Button {
-                        Task { await load() }
-                    } label: {
-                        Label("Refresh", systemImage: "arrow.clockwise")
-                    }
-                } label: {
-                    toolbarIcon("ellipsis")
+                    .menuIndicator(.hidden)
+                    .buttonStyle(.plain)
+                    .glassEffect(.regular, in: .circle)
                 }
-                .menuIndicator(.hidden)
-                .buttonStyle(.plain)
-                .glassEffect(.regular, in: .circle)
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 14)
@@ -411,6 +416,14 @@ public struct FileBrowserView: View {
         Task { await load() }
     }
 
+    private func resetToRoot() {
+        guard path != rootPath else { return }
+        path = rootPath
+        history = [rootPath]
+        historyIndex = 0
+        Task { await load() }
+    }
+
     // MARK: - Actions
 
     private func load() async {
@@ -526,9 +539,9 @@ public struct FileBrowserView: View {
 
 func toolbarIcon(_ systemImage: String, enabled: Bool = true) -> some View {
     Image(systemName: systemImage)
-        .font(.system(size: 15, weight: .medium))
+        .font(.system(size: 17, weight: .medium))
         .foregroundStyle(enabled ? Color.white : Color.white.opacity(0.3))
-        .frame(width: 40, height: 40)
+        .frame(width: 46, height: 46)
 }
 
 struct NavigationPill: View {
@@ -540,9 +553,6 @@ struct NavigationPill: View {
     var body: some View {
         HStack(spacing: 0) {
             pillButton(systemImage: "chevron.left", enabled: canGoBack, action: onBack)
-            Rectangle()
-                .fill(Color.white.opacity(0.15))
-                .frame(width: 0.5, height: 16)
             pillButton(systemImage: "chevron.right", enabled: canGoForward, action: onForward)
         }
         .glassEffect(.regular, in: .capsule)
