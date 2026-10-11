@@ -5,6 +5,7 @@ public enum APIError: Error, Equatable, Sendable {
     case server(status: Int, message: String?)
     case decoding
     case transport(String)
+    case sessionExpired
 }
 
 public extension APIError {
@@ -13,6 +14,7 @@ public extension APIError {
         case .server(_, let detail): return detail ?? "Error inesperado"
         case .transport(let description): return "No se pudo conectar: \(description)"
         case .decoding, .invalidResponse: return "Error inesperado"
+        case .sessionExpired: return "Tu sesión ha caducado"
         }
     }
 }

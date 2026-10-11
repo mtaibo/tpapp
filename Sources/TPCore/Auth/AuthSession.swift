@@ -16,6 +16,15 @@ public final class AuthSession: ObservableObject {
     public init(authenticator: PasswordTOTPAuthenticator, cookieStore: SessionCookieStore = HTTPCookieSessionStore()) {
         self.authenticator = authenticator
         self.cookieStore = cookieStore
+        NotificationCenter.default.addObserver(
+            forName: .tpSessionExpired,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.state = .signedOut
+            }
+        }
     }
 
     public convenience init(baseURL: URL, cookieStore: SessionCookieStore = HTTPCookieSessionStore()) {

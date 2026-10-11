@@ -1,5 +1,26 @@
 import Foundation
 
+extension Notification.Name {
+    /// Posted whenever a request is turned back by the gateway's login redirect, i.e. the
+    /// session cookie is no longer valid. AuthSession observes this to drop back to signed-out.
+    public static let tpSessionExpired = Notification.Name("TPSessionExpired")
+}
+
+/// The gateway's forward_auth sends a 302 to the login page when the session is gone. Following
+/// it would hand back login HTML where JSON was expected, so every redirect is blocked here and
+/// surfaced as `.sessionExpired` instead.
+private final class RedirectBlockingDelegate: NSObject, URLSessionTaskDelegate {
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
+    }
+}
+
 public struct HTTPClient: Sendable {
     public let baseURL: URL
     private let session: URLSession
@@ -121,6 +142,7 @@ public struct HTTPClient: Sendable {
         var request = URLRequest(url: components.url!)
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue(Self.clientPlatform, forHTTPHeaderField: "X-TP-Client")
         request.httpBody = body
         if let contentType {
             request.setValue(contentType, forHTTPHeaderField: "Content-Type")
@@ -129,7 +151,7 @@ public struct HTTPClient: Sendable {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await session.data(for: request)
+            (data, response) = try await session.data(for: request, delegate: RedirectBlockingDelegate())
         } catch {
             throw APIError.transport(error.localizedDescription)
         }
@@ -137,11 +159,23 @@ public struct HTTPClient: Sendable {
         guard let http = response as? HTTPURLResponse else {
             throw APIError.invalidResponse
         }
+        if (300..<400).contains(http.statusCode) {
+            NotificationCenter.default.post(name: .tpSessionExpired, object: nil)
+            throw APIError.sessionExpired
+        }
         guard (200..<300).contains(http.statusCode) else {
             throw APIError.server(status: http.statusCode, message: Self.errorDetail(from: data))
         }
         return data
     }
+
+    #if os(iOS)
+    private static let clientPlatform = "ios"
+    #elseif os(macOS)
+    private static let clientPlatform = "macos"
+    #else
+    private static let clientPlatform = "native"
+    #endif
 
     private static func errorDetail(from data: Data) -> String? {
         struct ErrorBody: Decodable { let detail: String? }
