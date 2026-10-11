@@ -2,4 +2,5 @@
 .swiftpm/
 App/TPApp.xcodeproj/
 App/Config/Local.xcconfig
+App/build/
 .DS_Store
