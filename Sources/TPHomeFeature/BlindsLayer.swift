@@ -1,16 +1,16 @@
 import SwiftUI
 import TPCore
 
+/// Purely visual: the invisible tap targets live in `BlueprintView`'s hit-test overlay instead,
+/// computed directly in screen space so they can't drift out of sync with `.scaleEffect`'s
+/// rendering (see `BlueprintView.hitTargets`).
 struct BlindsLayer: View {
     let blinds: [Blind]
-    let onSelect: (String) -> Void
 
     var body: some View {
         ForEach(blinds) { blind in
             blindView(blind)
                 .position(x: blind.map.x + blind.map.width / 2, y: blind.map.y + blind.map.height / 2)
-                .contentShape(Rectangle())
-                .onTapGesture { onSelect(blind.id) }
         }
     }
 
