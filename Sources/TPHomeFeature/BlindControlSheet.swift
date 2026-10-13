@@ -8,7 +8,10 @@ struct BlindControlSheet: View {
     @ObservedObject var store: HomeStore
     let onDismiss: () -> Void
 
-    @State private var position: Int
+    // Only holds the finger-tracked value while actively dragging; the rest of the time the
+    // slider mirrors `store.blinds[blind.id]` live, so WebSocket position updates (the motor
+    // moving) are reflected here too instead of only on the next open/close of the popup.
+    @State private var dragPosition: Int?
 
     private static let accent = Color(red: 0 / 255, green: 122 / 255, blue: 255 / 255)
 
@@ -16,8 +19,10 @@ struct BlindControlSheet: View {
         self.blind = blind
         self.store = store
         self.onDismiss = onDismiss
-        _position = State(initialValue: blind.state?.position ?? 0)
     }
+
+    private var livePosition: Int { store.blinds[blind.id]?.state?.position ?? blind.state?.position ?? 0 }
+    private var position: Int { dragPosition ?? livePosition }
 
     var body: some View {
         GlassEffectContainer {
@@ -28,10 +33,13 @@ struct BlindControlSheet: View {
                         .foregroundStyle(.white)
                     Spacer()
                     Button(action: onDismiss) {
+                        // Same sizing convention as the "..." glass button (FileBrowserView/
+                        // SharedView in TPStoreFeature): a dedicated, platform-sized label --
+                        // not toolbarIcon() -- since .buttonStyle(.glass) never shrinks its label.
                         Image(systemName: "xmark")
-                            .font(.system(size: 13, weight: .medium))
+                            .font(.system(size: Self.closeIconFontSize, weight: .medium))
                             .foregroundStyle(.white)
-                            .frame(width: 28, height: 28)
+                            .frame(width: Self.closeIconDimension, height: Self.closeIconDimension)
                     }
                     .buttonStyle(.glass)
                     .buttonBorderShape(.circle)
@@ -40,13 +48,17 @@ struct BlindControlSheet: View {
                 VStack(spacing: 10) {
                     BlindSlider(
                         position: position,
-                        onDrag: { position = $0 },
+                        onDrag: { dragPosition = $0 },
                         onDragEnd: { newPosition in
-                            position = newPosition
-                            Task { await store.sendSet(blind.id, position: newPosition) }
+                            dragPosition = newPosition
+                            Task {
+                                await store.sendSet(blind.id, position: newPosition)
+                                dragPosition = nil
+                            }
                         }
                     )
                     .frame(width: 160, height: 240)
+                    .animation(dragPosition == nil ? .easeInOut(duration: 0.4) : nil, value: livePosition)
 
                     HStack(alignment: .firstTextBaseline, spacing: 2) {
                         Text("\(position)")
@@ -66,18 +78,54 @@ struct BlindControlSheet: View {
             }
             .padding(24)
             .frame(width: 280)
-            .glassEffect(.regular.tint(.white.opacity(0.05)), in: .rect(cornerRadius: 28))
+            .glassEffect(.regular, in: .rect(cornerRadius: 28))
         }
     }
 
     private func controlButton(_ systemImage: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.system(size: 16, weight: .medium))
+                .font(.system(size: Self.controlIconFontSize, weight: .medium))
                 .foregroundStyle(.white)
-                .frame(width: 44, height: 44)
+                .frame(width: Self.controlIconDimension, height: Self.controlIconDimension)
         }
         .buttonStyle(.glass)
         .buttonBorderShape(.circle)
+    }
+
+    // Mirrors TPStoreFeature's ellipsisIconDimension/ellipsisIconFontSize exactly: the close
+    // button is the same kind of small corner icon action as the "..." menu button.
+    private static var closeIconDimension: CGFloat {
+        #if os(macOS)
+        23
+        #else
+        30
+        #endif
+    }
+
+    private static var closeIconFontSize: CGFloat {
+        #if os(macOS)
+        12
+        #else
+        16
+        #endif
+    }
+
+    // Up/stop/down are primary actions, so they get a larger touch target than the close
+    // button, but still scaled down for macOS pointer input like every other glass button here.
+    private static var controlIconDimension: CGFloat {
+        #if os(macOS)
+        34
+        #else
+        44
+        #endif
+    }
+
+    private static var controlIconFontSize: CGFloat {
+        #if os(macOS)
+        14
+        #else
+        18
+        #endif
     }
 }

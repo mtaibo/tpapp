@@ -6,10 +6,14 @@ import TPCore
 /// rendering (see `BlueprintView.hitTargets`).
 struct BlindsLayer: View {
     let blinds: [Blind]
+    let selectedBlindID: String?
 
     var body: some View {
         ForEach(blinds) { blind in
             blindView(blind)
+                // Hidden (not animated) the instant it's selected: `BlueprintView`'s hero card
+                // appears already matching this icon's exact screen rect, so the swap is seamless.
+                .opacity(blind.id == selectedBlindID ? 0 : 1)
                 .position(x: blind.map.x + blind.map.width / 2, y: blind.map.y + blind.map.height / 2)
         }
     }
@@ -36,6 +40,7 @@ struct BlindsLayer: View {
 
             slatFill(isHorizontal: isHorizontal(blind))
                 .frame(width: cover.width, height: cover.height)
+                .animation(.easeInOut(duration: 0.4), value: blind.state?.position)
         }
         .frame(width: blind.map.width, height: blind.map.height)
         .clipShape(RoundedRectangle(cornerRadius: 1.5))
