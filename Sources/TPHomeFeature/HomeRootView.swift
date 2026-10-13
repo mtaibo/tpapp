@@ -31,31 +31,74 @@ public struct HomeRootView: View {
     }
 
     public var body: some View {
-        HStack(spacing: 0) {
-            sidebar
-
-            VStack(spacing: 0) {
-                if let loadError = store.loadError {
-                    HStack {
-                        Text(loadError)
-                            .font(.footnote)
-                            .foregroundStyle(.red)
-                        Spacer()
-                        Button("Reintentar") { Task { await store.refresh() } }
-                    }
-                    .padding()
-                }
-
-                switch section {
-                case .blueprint: BlueprintView(store: store)
-                case .blinds: BlindsSectionView(store: store)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        #if os(iOS)
+        ZStack(alignment: .top) {
+            content
+            sectionMenu
         }
         .background(Color.black.ignoresSafeArea())
         .colorScheme(.dark)
+        #else
+        HStack(spacing: 0) {
+            sidebar
+            content
+        }
+        .background(Color.black.ignoresSafeArea())
+        .colorScheme(.dark)
+        #endif
     }
+
+    private var content: some View {
+        VStack(spacing: 0) {
+            if let loadError = store.loadError {
+                HStack {
+                    Text(loadError)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                    Spacer()
+                    Button("Reintentar") { Task { await store.refresh() } }
+                }
+                .padding()
+            }
+
+            switch section {
+            case .blueprint: BlueprintView(store: store)
+            case .blinds: BlindsSectionView(store: store)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    #if os(iOS)
+    /// iOS has no room for the macOS sidebar, so the map/section picker collapses into
+    /// a single Store-style "..." glass button (top-trailing) with a checkmarked list
+    /// of sections inside -- new sections just need a new `Section` case, no UI changes.
+    private var sectionMenu: some View {
+        GlassEffectContainer {
+            HStack {
+                Spacer()
+                Menu {
+                    Picker("Section", selection: $section) {
+                        ForEach(Section.allCases, id: \.self) { item in
+                            Label(item.title, systemImage: item.icon).tag(item)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(.white)
+                        .frame(width: 30, height: 30)
+                }
+                .menuIndicator(.hidden)
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 14)
+        }
+    }
+    #endif
 
     /// Mirrors tphome's `Sidebar.vue`/`NavButton.vue`: dark panel (`#111113`), accent-colored icon
     /// regardless of selection, active row highlighted with a `#1c1c1e` rounded pill and bold label.
