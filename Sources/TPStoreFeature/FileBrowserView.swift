@@ -2,16 +2,23 @@ import Foundation
 import SwiftUI
 import TPCore
 import UniformTypeIdentifiers
+#if os(macOS)
+import AppKit
+#elseif os(iOS)
+import UIKit
+#endif
 
 public struct FileBrowserView: View {
     let storeClient: StoreClient
     let rootPath: String
     let resetSignal: Int
+    let isAdmin: Bool
 
     @State private var location: StoreLocation = .external
     @State private var path: String
-    @State private var history: [String]
+    @State private var history: [(location: StoreLocation, path: String)]
     @State private var historyIndex = 0
+    @StateObject private var favoritesStore = StoreFavoritesStore()
 
     @State private var entries: [FileEntry] = []
     @State private var disk: DiskInfo?
@@ -35,25 +42,51 @@ public struct FileBrowserView: View {
     @State private var downloadDocument: RawFileDocument?
     @State private var downloadFilename = ""
 
-    @State private var topBarHeight: CGFloat = 70
+    @State private var isPreviewLoading = false
 
-    public init(storeClient: StoreClient, rootPath: String = "", resetSignal: Int = 0) {
+    @State private var topBarHeight: CGFloat = 70
+    @State private var pillWidth: CGFloat = toolbarIconDimension * 2
+    @State private var menuWidth: CGFloat = toolbarIconDimension
+
+    public init(storeClient: StoreClient, rootPath: String = "", resetSignal: Int = 0, isAdmin: Bool = false) {
         self.storeClient = storeClient
         self.rootPath = rootPath
         self.resetSignal = resetSignal
+        self.isAdmin = isAdmin
         _path = State(initialValue: rootPath)
-        _history = State(initialValue: [rootPath])
+        _history = State(initialValue: [(location: .external, path: rootPath)])
     }
 
     public var body: some View {
+        #if os(macOS)
+        HStack(spacing: 0) {
+            StoreSidebarView(
+                favoritesStore: favoritesStore,
+                rootPath: rootPath,
+                isAdmin: isAdmin,
+                currentLocation: location,
+                currentPath: path,
+                onNavigate: { newLocation, newPath in navigate(to: newPath, location: newLocation) },
+                onAddFavorite: { favoritesStore.addCurrentFolder(location: location, path: path, rootPath: rootPath) }
+            )
+            mainContent
+        }
+        .frame(minWidth: 840, minHeight: 540)
+        #else
+        mainContent
+        #endif
+    }
+
+    private var mainContent: some View {
         ZStack(alignment: .top) {
             TPStoreTheme.background.ignoresSafeArea()
             content
             toolbar
+            if isPreviewLoading {
+                Color.black.opacity(0.3).ignoresSafeArea()
+                ProgressView().tint(.white)
+            }
         }
-        #if os(macOS)
-        .frame(minWidth: 640, minHeight: 540)
-        #endif
         .task { await load() }
         .onChange(of: resetSignal) { _, _ in
             resetToRoot()
@@ -113,15 +146,21 @@ public struct FileBrowserView: View {
     private var toolbar: some View {
         GlassEffectContainer(spacing: 10) {
             ZStack {
+                // Centered on the full toolbar width (not just the gap between the
+                // buttons), but padded away from the pill/menu zones -- using their
+                // real measured widths, not a guess -- so a long name truncates
+                // with a trailing "..." instead of sliding underneath them.
                 Text(currentFolderTitle)
                     .font(.system(size: 16, weight: .medium))
                     .foregroundStyle(.white)
                     .lineLimit(1)
-                    .truncationMode(.middle)
+                    .truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.horizontal, titleSideInset)
 
                 HStack(spacing: 10) {
                     navigationPill
+                        .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { pillWidth = $0 }
                     Spacer()
                     Menu {
                         if let disk {
@@ -150,11 +189,19 @@ public struct FileBrowserView: View {
                             Label("Refresh", systemImage: "arrow.clockwise")
                         }
                     } label: {
-                        toolbarIcon("ellipsis")
+                        // Deliberately NOT toolbarIcon(): that helper hard-codes a
+                        // 46x46/32x32 inner frame which floors the glass button's
+                        // size no matter what outer frame/controlSize is applied on
+                        // top. This label is sized just for this button.
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: ellipsisIconFontSize, weight: .medium))
+                            .foregroundStyle(.white)
+                            .frame(width: ellipsisIconDimension, height: ellipsisIconDimension)
                     }
                     .menuIndicator(.hidden)
-                    .buttonStyle(.plain)
-                    .glassEffect(.regular, in: .circle)
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.circle)
+                    .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { menuWidth = $0 }
                 }
             }
             .padding(.horizontal, 20)
@@ -165,11 +212,23 @@ public struct FileBrowserView: View {
         }
     }
 
+    /// Symmetric padding that keeps the title's truncation box centered on the
+    /// full toolbar width while still clearing the wider of the two side buttons
+    /// on both edges. Measured from the actual rendered buttons (rather than a
+    /// guessed width) so it reserves no more space than is really needed.
+    private var titleSideInset: CGFloat {
+        max(pillWidth, menuWidth) + 8
+    }
+
     private var currentFolderTitle: String {
-        if path == rootPath {
+        if path == rootPath, location == .external {
             return rootPath.isEmpty ? "Store" : "Home"
         }
-        return path.split(separator: "/").last.map(String.init) ?? path
+        if path.isEmpty {
+            return location == .server ? "System" : "Disk"
+        }
+        let last = path.split(separator: "/").last.map(String.init) ?? path
+        return last == "shared" ? "Shared" : last
     }
 
     private var navigationPill: some View {
@@ -185,7 +244,7 @@ public struct FileBrowserView: View {
 
     @ViewBuilder
     private var content: some View {
-        if isLoading {
+        if isLoading && entries.isEmpty && loadError == nil {
             VStack {
                 Spacer()
                 ProgressView().tint(.white)
@@ -205,10 +264,18 @@ public struct FileBrowserView: View {
                     .foregroundStyle(TPStoreTheme.textMuted)
                 Spacer()
             }
-        } else if isGalleryView {
-            galleryContent
         } else {
-            listContent
+            ZStack(alignment: .top) {
+                if isGalleryView { galleryContent } else { listContent }
+                if isLoading {
+                    ProgressView()
+                        .tint(.white)
+                        .padding(.top, topBarHeight + 16)
+                }
+            }
+            .opacity(isLoading ? 0.45 : 1.0)
+            .allowsHitTesting(!isLoading)
+            .animation(.easeOut(duration: 0.15), value: isLoading)
         }
     }
 
@@ -258,7 +325,7 @@ public struct FileBrowserView: View {
     }
 
     private func entryRow(_ entry: FileEntry) -> some View {
-        HStack(spacing: 11) {
+        let row = HStack(spacing: 11) {
             icon(for: entry)
                 .frame(width: 20, height: 20)
 
@@ -280,15 +347,30 @@ public struct FileBrowserView: View {
         .padding(.horizontal, 20)
         .padding(.vertical, 13)
         .contentShape(Rectangle())
-        .onTapGesture {
-            guard entry.isDirectory else { return }
-            navigate(to: path.isEmpty ? entry.name : "\(path)/\(entry.name)")
+
+        return Group {
+            if entry.isDirectory {
+                // No double-tap recognizer here: mixing single+double tap on the
+                // same row forces SwiftUI to wait out the double-tap timeout
+                // before firing navigation, which is what made folder taps feel slow.
+                Button {
+                    navigate(to: path.isEmpty ? entry.name : "\(path)/\(entry.name)")
+                } label: {
+                    row
+                }
+                .buttonStyle(RowPressButtonStyle())
+            } else {
+                row.onTapGesture(count: 2) {
+                    openPreview(entry)
+                }
+            }
         }
         .contextMenu { contextMenuItems(entry) }
+        .onDrag { fileItemProvider(for: entry) }
     }
 
     private func galleryTile(_ entry: FileEntry) -> some View {
-        VStack(spacing: 8) {
+        let tile = VStack(spacing: 8) {
             ZStack {
                 RoundedRectangle(cornerRadius: 8)
                     .fill(Color.white.opacity(0.05))
@@ -318,11 +400,23 @@ public struct FileBrowserView: View {
         .padding(.vertical, 10)
         .padding(.horizontal, 8)
         .contentShape(RoundedRectangle(cornerRadius: 10))
-        .onTapGesture {
-            guard entry.isDirectory else { return }
-            navigate(to: path.isEmpty ? entry.name : "\(path)/\(entry.name)")
+
+        return Group {
+            if entry.isDirectory {
+                Button {
+                    navigate(to: path.isEmpty ? entry.name : "\(path)/\(entry.name)")
+                } label: {
+                    tile
+                }
+                .buttonStyle(RowPressButtonStyle())
+            } else {
+                tile.onTapGesture(count: 2) {
+                    openPreview(entry)
+                }
+            }
         }
         .contextMenu { contextMenuItems(entry) }
+        .onDrag { fileItemProvider(for: entry) }
     }
 
     @ViewBuilder
@@ -394,10 +488,11 @@ public struct FileBrowserView: View {
 
     // MARK: - Navigation
 
-    private func navigate(to newPath: String) {
+    private func navigate(to newPath: String, location newLocation: StoreLocation? = nil) {
+        if let newLocation { location = newLocation }
         path = newPath
         history.removeSubrange((historyIndex + 1)...)
-        history.append(newPath)
+        history.append((location: location, path: newPath))
         historyIndex = history.count - 1
         Task { await load() }
     }
@@ -405,21 +500,22 @@ public struct FileBrowserView: View {
     private func goBack() {
         guard historyIndex > 0 else { return }
         historyIndex -= 1
-        path = history[historyIndex]
+        (location, path) = history[historyIndex]
         Task { await load() }
     }
 
     private func goForward() {
         guard historyIndex < history.count - 1 else { return }
         historyIndex += 1
-        path = history[historyIndex]
+        (location, path) = history[historyIndex]
         Task { await load() }
     }
 
     private func resetToRoot() {
-        guard path != rootPath else { return }
+        guard path != rootPath || location != .external else { return }
+        location = .external
         path = rootPath
-        history = [rootPath]
+        history = [(location: .external, path: rootPath)]
         historyIndex = 0
         Task { await load() }
     }
@@ -495,6 +591,53 @@ public struct FileBrowserView: View {
         }
     }
 
+    private func downloadToTempFile(_ entry: FileEntry) async throws -> URL {
+        let entryPath = path.isEmpty ? entry.name : "\(path)/\(entry.name)"
+        let data = try await storeClient.download(path: entryPath, location: location)
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let tempURL = tempDir.appendingPathComponent(entry.name)
+        try data.write(to: tempURL)
+        return tempURL
+    }
+
+    private func openPreview(_ entry: FileEntry) {
+        Task {
+            isPreviewLoading = true
+            defer { isPreviewLoading = false }
+            do {
+                let tempURL = try await downloadToTempFile(entry)
+                #if os(macOS)
+                NSWorkspace.shared.open(tempURL)
+                #elseif os(iOS)
+                await UIApplication.shared.open(tempURL)
+                #endif
+            } catch {
+                loadError = apiErrorMessage(error)
+            }
+        }
+    }
+
+    /// Lazily downloads the file only once a drop target actually accepts it, mirroring Finder's file-promise drag.
+    private func fileItemProvider(for entry: FileEntry) -> NSItemProvider {
+        let provider = NSItemProvider()
+        guard !entry.isDirectory else { return provider }
+        let utType = UTType(filenameExtension: (entry.name as NSString).pathExtension) ?? .data
+        provider.suggestedName = entry.name
+        provider.registerFileRepresentation(forTypeIdentifier: utType.identifier, fileOptions: [], visibility: .all) { completion in
+            Task {
+                do {
+                    let tempURL = try await downloadToTempFile(entry)
+                    completion(tempURL, false, nil)
+                } catch {
+                    completion(nil, false, error)
+                }
+            }
+            return nil
+        }
+        return provider
+    }
+
     private func startDownloadZip(_ entry: FileEntry) async {
         do {
             let entryPath = path.isEmpty ? entry.name : "\(path)/\(entry.name)"
@@ -537,11 +680,44 @@ public struct FileBrowserView: View {
     }
 }
 
+var toolbarIconDimension: CGFloat {
+    #if os(macOS)
+    32
+    #else
+    46
+    #endif
+}
+
+// Smaller than toolbarIconDimension on purpose: unlike the nav pill (which uses
+// the manual .glassEffect() API), the ellipsis Menu uses .buttonStyle(.glass),
+// which only adds padding/chrome around whatever size its label already is --
+// it never shrinks it. So the label itself must be small for the button to be small.
+var ellipsisIconDimension: CGFloat {
+    #if os(macOS)
+    23
+    #else
+    30
+    #endif
+}
+
+var ellipsisIconFontSize: CGFloat {
+    #if os(macOS)
+    12
+    #else
+    16
+    #endif
+}
+
 func toolbarIcon(_ systemImage: String, enabled: Bool = true) -> some View {
-    Image(systemName: systemImage)
-        .font(.system(size: 17, weight: .medium))
+    #if os(macOS)
+    let fontSize: CGFloat = 13
+    #else
+    let fontSize: CGFloat = 17
+    #endif
+    return Image(systemName: systemImage)
+        .font(.system(size: fontSize, weight: .medium))
         .foregroundStyle(enabled ? Color.white : Color.white.opacity(0.3))
-        .frame(width: 46, height: 46)
+        .frame(width: toolbarIconDimension, height: toolbarIconDimension)
 }
 
 struct NavigationPill: View {
@@ -555,7 +731,11 @@ struct NavigationPill: View {
             pillButton(systemImage: "chevron.left", enabled: canGoBack, action: onBack)
             pillButton(systemImage: "chevron.right", enabled: canGoForward, action: onForward)
         }
-        .glassEffect(.regular, in: .capsule)
+        // .interactive() is the system's own press animation for a glass
+        // shape (the same machinery behind .buttonStyle(.glass)), applied to
+        // the capsule as a whole -- so pressing either chevron grows/lightens
+        // the entire pill together with native quality, not a hand-rolled one.
+        .glassEffect(.regular.interactive(), in: .capsule)
     }
 
     private func pillButton(systemImage: String, enabled: Bool, action: @escaping () -> Void) -> some View {
@@ -564,6 +744,16 @@ struct NavigationPill: View {
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
+    }
+}
+
+/// Highlights a file/folder row while pressed, mirroring the Files app's
+/// instant tap feedback before the navigation/action actually completes.
+private struct RowPressButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(configuration.isPressed ? Color.white.opacity(0.08) : Color.clear)
+            .animation(.easeOut(duration: 0.1), value: configuration.isPressed)
     }
 }
 

@@ -3,4 +3,5 @@
 App/TPApp.xcodeproj/
 App/Config/Local.xcconfig
 App/build/
+App/build-ios/
 .DS_Store

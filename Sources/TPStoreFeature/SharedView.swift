@@ -1,5 +1,6 @@
 import SwiftUI
 import TPCore
+import UniformTypeIdentifiers
 
 public struct SharedView: View {
     private static let rootPath = "shared"
@@ -17,6 +18,13 @@ public struct SharedView: View {
     @State private var loadError: String?
     @State private var copiedToken: String?
     @State private var topBarHeight: CGFloat = 70
+    @State private var disk: DiskInfo?
+
+    @State private var isGalleryView = false
+    @State private var isCreatingFolder = false
+    @State private var newFolderName = ""
+    @State private var isImportingFile = false
+    @State private var isUploading = false
 
     public init(storeClient: StoreClient, resetSignal: Int = 0) {
         self.storeClient = storeClient
@@ -36,6 +44,19 @@ public struct SharedView: View {
         .onChange(of: resetSignal) { _, _ in
             resetToRoot()
         }
+        .alert("New folder", isPresented: $isCreatingFolder) {
+            TextField("Name", text: $newFolderName)
+            Button("Create") { Task { await createFolder() } }
+            Button("Cancel", role: .cancel) { newFolderName = "" }
+        }
+        .fileImporter(isPresented: $isImportingFile, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+            switch result {
+            case .success(let urls):
+                Task { await upload(urls) }
+            case .failure(let error):
+                loadError = error.localizedDescription
+            }
+        }
     }
 
     // MARK: - Toolbar
@@ -54,17 +75,40 @@ public struct SharedView: View {
                     navigationPill
                     Spacer()
                     Menu {
+                        if let disk {
+                            Text("\(formatBytes(disk.used)) of \(formatBytes(disk.total)) used")
+                            Divider()
+                        }
+                        Button {
+                            isGalleryView.toggle()
+                        } label: {
+                            Label(isGalleryView ? "List view" : "Gallery view", systemImage: isGalleryView ? "list.bullet" : "square.grid.2x2")
+                        }
+                        Button {
+                            newFolderName = ""
+                            isCreatingFolder = true
+                        } label: {
+                            Label("New folder", systemImage: "folder.badge.plus")
+                        }
+                        Button {
+                            isImportingFile = true
+                        } label: {
+                            Label("Upload", systemImage: "arrow.up.circle")
+                        }
                         Button {
                             Task { await load() }
                         } label: {
                             Label("Refresh", systemImage: "arrow.clockwise")
                         }
                     } label: {
-                        toolbarIcon("ellipsis")
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: ellipsisIconFontSize, weight: .medium))
+                            .foregroundStyle(.white)
+                            .frame(width: ellipsisIconDimension, height: ellipsisIconDimension)
                     }
                     .menuIndicator(.hidden)
-                    .buttonStyle(.plain)
-                    .glassEffect(.regular, in: .circle)
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.circle)
                 }
             }
             .padding(.horizontal, 20)
@@ -125,9 +169,18 @@ public struct SharedView: View {
                     }
                     if !entries.isEmpty {
                         sectionHeader("Folders")
-                        ForEach(entries) { entry in
-                            entryRow(entry)
-                            Rectangle().fill(TPStoreTheme.divider).frame(height: 0.5)
+                        if isGalleryView {
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: 12)], spacing: 12) {
+                                ForEach(entries) { entry in
+                                    galleryTile(entry)
+                                }
+                            }
+                            .padding(.horizontal, 16)
+                        } else {
+                            ForEach(entries) { entry in
+                                entryRow(entry)
+                                Rectangle().fill(TPStoreTheme.divider).frame(height: 0.5)
+                            }
                         }
                     }
                 }
@@ -167,6 +220,34 @@ public struct SharedView: View {
             guard entry.isDirectory else { return }
             navigate(to: "\(path)/\(entry.name)")
         }
+    }
+
+    private func galleryTile(_ entry: FileEntry) -> some View {
+        let tile = VStack(spacing: 8) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.white.opacity(0.05))
+                    .frame(width: 110, height: 110)
+                Image(systemName: entry.isDirectory ? "folder.fill" : "doc.fill")
+                    .font(.system(size: 36))
+                    .foregroundStyle(TPStoreTheme.accentGray)
+            }
+            Text(entry.name)
+                .font(.system(size: 12))
+                .foregroundStyle(TPStoreTheme.textPrimary)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+        }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 8)
+        .contentShape(RoundedRectangle(cornerRadius: 10))
+
+        return tile
+            .contentShape(Rectangle())
+            .onTapGesture {
+                guard entry.isDirectory else { return }
+                navigate(to: "\(path)/\(entry.name)")
+            }
     }
 
     private func shareRow(_ share: TPCore.ShareLink) -> some View {
@@ -241,6 +322,10 @@ public struct SharedView: View {
         share.path.split(separator: "/").last.map(String.init) ?? share.path
     }
 
+    private func formatBytes(_ count: Int) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(count), countStyle: .file)
+    }
+
     // MARK: - Navigation
 
     private func navigate(to newPath: String) {
@@ -280,11 +365,14 @@ public struct SharedView: View {
         loadError = nil
         defer { isLoading = false }
         do {
-            let listing = try await storeClient.listDirectory(path: path, location: .external)
-            entries = listing.entries.sorted { lhs, rhs in
+            async let listing = storeClient.listDirectory(path: path, location: .external)
+            async let diskInfo = storeClient.diskInfo()
+            let (fetchedListing, fetchedDisk) = try await (listing, diskInfo)
+            entries = fetchedListing.entries.sorted { lhs, rhs in
                 if lhs.isDirectory != rhs.isDirectory { return lhs.isDirectory }
                 return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
             }
+            disk = fetchedDisk
             shares = path == Self.rootPath ? try await storeClient.shares() : []
         } catch {
             loadError = apiErrorMessage(error)
@@ -298,5 +386,46 @@ public struct SharedView: View {
         } catch {
             loadError = apiErrorMessage(error)
         }
+    }
+
+    private func createFolder() async {
+        let name = newFolderName.trimmingCharacters(in: .whitespacesAndNewlines)
+        newFolderName = ""
+        guard !name.isEmpty else { return }
+        do {
+            try await storeClient.createFolder(path: "\(path)/\(name)", location: .external)
+            await load()
+        } catch {
+            loadError = apiErrorMessage(error)
+        }
+    }
+
+    private func upload(_ urls: [URL]) async {
+        isUploading = true
+        defer { isUploading = false }
+        for url in urls {
+            let accessed = url.startAccessingSecurityScopedResource()
+            defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+            do {
+                let data = try Data(contentsOf: url)
+                try await storeClient.upload(
+                    path: path,
+                    location: .external,
+                    filename: url.lastPathComponent,
+                    data: data,
+                    mimeType: mimeType(for: url)
+                )
+            } catch {
+                loadError = apiErrorMessage(error)
+            }
+        }
+        await load()
+    }
+
+    private func mimeType(for url: URL) -> String {
+        guard let type = UTType(filenameExtension: url.pathExtension), let mime = type.preferredMIMEType else {
+            return "application/octet-stream"
+        }
+        return mime
     }
 }
