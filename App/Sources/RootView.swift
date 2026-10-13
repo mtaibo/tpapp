@@ -21,6 +21,8 @@ struct RootView: View {
     var body: some View {
         Group {
             switch session.state {
+            case .checkingSession:
+                Color.black.ignoresSafeArea()
             case .signedOut, .totpRequired:
                 LoginView(session: session)
             case .signedIn(let profile):

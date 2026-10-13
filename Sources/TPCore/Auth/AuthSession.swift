@@ -3,12 +3,13 @@ import Foundation
 @MainActor
 public final class AuthSession: ObservableObject {
     public enum State: Equatable, Sendable {
+        case checkingSession
         case signedOut
         case totpRequired(email: String)
         case signedIn(UserProfile)
     }
 
-    @Published public private(set) var state: State = .signedOut
+    @Published public private(set) var state: State = .checkingSession
 
     private let authenticator: PasswordTOTPAuthenticator
     private let cookieStore: SessionCookieStore
