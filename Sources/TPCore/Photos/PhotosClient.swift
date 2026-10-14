@@ -129,6 +129,18 @@ public struct PhotosClient: Sendable {
         return components.url!
     }
 
+    public struct SanitizeReport: Decodable, Sendable {
+        public let dryRun: Bool
+        public let moved: Int
+        public let recoveredOrphans: Int
+        public let duplicatesRemoved: Int
+        public let errors: [String]
+    }
+
+    public func sanitize(dryRun: Bool) async throws -> SanitizeReport {
+        try await client.post("/api/photos/sanitize", query: ["dry_run": String(dryRun)])
+    }
+
     public func originalURL(for photo: Photo) -> URL {
         var components = URLComponents(url: client.baseURL.appending(path: "/api/files/download"), resolvingAgainstBaseURL: false)!
         components.queryItems = [

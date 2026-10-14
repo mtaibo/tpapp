@@ -41,7 +41,8 @@ struct RootView: View {
                         store: photoGalleryStore,
                         syncStore: photoSyncStore,
                         client: photosClient,
-                        ownerEmail: profile.email
+                        ownerEmail: profile.email,
+                        isAdmin: profile.isAdmin
                     )
                         .tabItem { Label("Photos", systemImage: "photo.on.rectangle") }
                         .tag(AppTab.photos)

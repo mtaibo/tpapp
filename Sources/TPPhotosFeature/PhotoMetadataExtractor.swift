@@ -1,6 +1,6 @@
 import CryptoKit
 import ImageIO
-import Photos
+@preconcurrency import Photos
 import UniformTypeIdentifiers
 
 public struct ExtractedPhotoMetadata: Sendable {
@@ -25,6 +25,33 @@ public struct ExtractedPhotoMetadata: Sendable {
 public enum PhotoMetadataExtractor {
     public enum ExtractionError: Error {
         case noPhotoResource
+        case timedOut
+    }
+
+    /// iCloud-sourced originals can stall indefinitely inside PhotoKit's own download queue;
+    /// without a timeout a single stuck asset would hang `backupNow()` forever (stuck
+    /// "uploading" button, no retry possible). Each network-capable request below races
+    /// against this and cancels itself on expiry so the backup loop can move on.
+    private static let perRequestTimeout: Duration = .seconds(90)
+
+    private struct TimeoutError: Error {}
+
+    /// Runs `operation` against a timeout, invoking `onTimeout` (e.g. to cancel the underlying
+    /// PhotoKit request) and throwing if the timeout wins the race.
+    private static func withTimeout<T: Sendable>(
+        onTimeout: @escaping @Sendable () -> Void,
+        operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await operation() }
+            group.addTask {
+                try await Task.sleep(for: perRequestTimeout)
+                onTimeout()
+                throw TimeoutError()
+            }
+            defer { group.cancelAll() }
+            return try await group.next()!
+        }
     }
 
     public static func extract(from asset: PHAsset) async throws -> ExtractedPhotoMetadata {
@@ -77,70 +104,101 @@ public enum PhotoMetadataExtractor {
     /// Streams the asset's bytes once, hashing as it goes — the same read produces the upload
     /// payload, its size, and the checksum the server will later re-verify from disk.
     private static func loadDataAndChecksum(for resource: PHAssetResource) async throws -> (Data, String) {
-        var hasher = SHA256()
-        var buffer = Data()
+        let accumulator = ChunkAccumulator()
+        let requestBox = Box<PHAssetResourceDataRequestID>()
+        let manager = PHAssetResourceManager.default()
         let options = PHAssetResourceRequestOptions()
         options.isNetworkAccessAllowed = true
 
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            PHAssetResourceManager.default().requestData(
-                for: resource,
-                options: options,
-                dataReceivedHandler: { chunk in
-                    hasher.update(data: chunk)
-                    buffer.append(chunk)
-                },
-                completionHandler: { error in
-                    if let error {
-                        continuation.resume(throwing: error)
-                    } else {
-                        continuation.resume()
+        try await withTimeout(onTimeout: {
+            if let id = requestBox.value { manager.cancelDataRequest(id) }
+        }) {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                requestBox.value = manager.requestData(
+                    for: resource,
+                    options: options,
+                    dataReceivedHandler: { chunk in accumulator.append(chunk) },
+                    completionHandler: { error in
+                        if let error {
+                            continuation.resume(throwing: error)
+                        } else {
+                            continuation.resume()
+                        }
                     }
-                }
-            )
+                )
+            }
         }
 
-        let checksum = hasher.finalize().map { String(format: "%02x", $0) }.joined()
-        return (buffer, checksum)
+        return (accumulator.data, accumulator.checksum())
     }
 
-    private struct EXIFInfo {
+    private struct EXIFInfo: Sendable {
         var cameraMake: String?
         var cameraModel: String?
         var gpsLat: Double?
         var gpsLon: Double?
     }
 
+    /// EXIF is best-effort metadata: on timeout or any failure we fall back to an empty
+    /// `EXIFInfo()` rather than failing the whole asset, same as the original behavior.
     private static func loadEXIF(for asset: PHAsset) async -> EXIFInfo {
-        await withCheckedContinuation { continuation in
-            let options = PHContentEditingInputRequestOptions()
-            options.isNetworkAccessAllowed = true
-            asset.requestContentEditingInput(with: options) { input, _ in
-                guard let url = input?.fullSizeImageURL,
-                      let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-                      let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] else {
-                    continuation.resume(returning: EXIFInfo())
-                    return
+        let requestBox = Box<PHContentEditingInputRequestID>()
+
+        let result: EXIFInfo? = try? await withTimeout(onTimeout: {
+            if let id = requestBox.value { asset.cancelContentEditingInputRequest(id) }
+        }) {
+            await withCheckedContinuation { continuation in
+                let options = PHContentEditingInputRequestOptions()
+                options.isNetworkAccessAllowed = true
+                requestBox.value = asset.requestContentEditingInput(with: options) { input, _ in
+                    guard let url = input?.fullSizeImageURL,
+                          let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+                          let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] else {
+                        continuation.resume(returning: EXIFInfo())
+                        return
+                    }
+
+                    let tiff = props[kCGImagePropertyTIFFDictionary] as? [CFString: Any]
+                    let gps = props[kCGImagePropertyGPSDictionary] as? [CFString: Any]
+
+                    var info = EXIFInfo()
+                    info.cameraMake = tiff?[kCGImagePropertyTIFFMake] as? String
+                    info.cameraModel = tiff?[kCGImagePropertyTIFFModel] as? String
+
+                    if let gps,
+                       let latitude = gps[kCGImagePropertyGPSLatitude] as? Double,
+                       let latRef = gps[kCGImagePropertyGPSLatitudeRef] as? String,
+                       let longitude = gps[kCGImagePropertyGPSLongitude] as? Double,
+                       let lonRef = gps[kCGImagePropertyGPSLongitudeRef] as? String {
+                        info.gpsLat = latRef == "S" ? -latitude : latitude
+                        info.gpsLon = lonRef == "W" ? -longitude : longitude
+                    }
+
+                    continuation.resume(returning: info)
                 }
-
-                let tiff = props[kCGImagePropertyTIFFDictionary] as? [CFString: Any]
-                let gps = props[kCGImagePropertyGPSDictionary] as? [CFString: Any]
-
-                var info = EXIFInfo()
-                info.cameraMake = tiff?[kCGImagePropertyTIFFMake] as? String
-                info.cameraModel = tiff?[kCGImagePropertyTIFFModel] as? String
-
-                if let gps,
-                   let latitude = gps[kCGImagePropertyGPSLatitude] as? Double,
-                   let latRef = gps[kCGImagePropertyGPSLatitudeRef] as? String,
-                   let longitude = gps[kCGImagePropertyGPSLongitude] as? Double,
-                   let lonRef = gps[kCGImagePropertyGPSLongitudeRef] as? String {
-                    info.gpsLat = latRef == "S" ? -latitude : latitude
-                    info.gpsLon = lonRef == "W" ? -longitude : longitude
-                }
-
-                continuation.resume(returning: info)
             }
         }
+
+        return result ?? EXIFInfo()
+    }
+}
+
+/// Serially mutated by PhotoKit's own callback queue; the timeout task only reads it to issue
+/// a cancellation, so a plain `@unchecked Sendable` box is safe here without extra locking.
+private final class Box<T>: @unchecked Sendable {
+    var value: T?
+}
+
+private final class ChunkAccumulator: @unchecked Sendable {
+    private var hasher = SHA256()
+    private(set) var data = Data()
+
+    func append(_ chunk: Data) {
+        hasher.update(data: chunk)
+        data.append(chunk)
+    }
+
+    func checksum() -> String {
+        hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 }

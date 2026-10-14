@@ -17,6 +17,9 @@ public final class PhotoSyncStore: ObservableObject {
     @Published public private(set) var lastError: String?
     @Published public private(set) var lastBackupAt: Date?
 
+    @Published public private(set) var isSanitizing = false
+    @Published public private(set) var lastSanitizeMessage: String?
+
     public var progressDone: Int { progressCompleted + progressFailed }
 
     public var progressFraction: Double {
@@ -124,6 +127,27 @@ public final class PhotoSyncStore: ObservableObject {
             lastError = "\(progressFailed) foto(s) no se pudieron subir, se reintentarán en el próximo backup"
         }
         lastBackupAt = Date()
+    }
+
+    /// Reorganizes the server's on-disk photo layout to match each photo's DB `taken_at`, and
+    /// recovers any uploads that completed without ever being registered. Admin-only server-side.
+    public func sanitizeNow() async {
+        guard !isSanitizing else { return }
+        isSanitizing = true
+        lastError = nil
+        lastSanitizeMessage = nil
+        defer { isSanitizing = false }
+
+        do {
+            let report = try await client.sanitize(dryRun: false)
+            var message = "Reorganizadas \(report.moved), recuperadas \(report.recoveredOrphans), duplicados eliminados \(report.duplicatesRemoved)"
+            if !report.errors.isEmpty {
+                message += " · \(report.errors.count) error(es)"
+            }
+            lastSanitizeMessage = message
+        } catch {
+            lastError = "No se pudo reorganizar las fotos"
+        }
     }
 
     private struct AssetScan {

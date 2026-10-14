@@ -6,15 +6,17 @@ public struct PhotoGalleryView: View {
     @ObservedObject var syncStore: PhotoSyncStore
     let client: PhotosClient
     let ownerEmail: String
+    let isAdmin: Bool
 
     @State private var selectedPhoto: Photo?
     @State private var topBarHeight: CGFloat = 120
 
-    public init(store: PhotoGalleryStore, syncStore: PhotoSyncStore, client: PhotosClient, ownerEmail: String) {
+    public init(store: PhotoGalleryStore, syncStore: PhotoSyncStore, client: PhotosClient, ownerEmail: String, isAdmin: Bool = false) {
         self.store = store
         self.syncStore = syncStore
         self.client = client
         self.ownerEmail = ownerEmail
+        self.isAdmin = isAdmin
     }
 
     public var body: some View {
@@ -43,7 +45,7 @@ public struct PhotoGalleryView: View {
                         .font(.system(size: 16, weight: .medium))
                         .foregroundStyle(.white)
                     Spacer()
-                    backupButton
+                    menuButton
                 }
                 backupStatus
                 filterChips
@@ -64,34 +66,54 @@ public struct PhotoGalleryView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(TPPhotosTheme.textMuted)
             }
+        } else if syncStore.isSanitizing {
+            Text("Reorganizando fotos…")
+                .font(.system(size: 11))
+                .foregroundStyle(TPPhotosTheme.textMuted)
         } else if let error = syncStore.lastError {
             Text(error)
                 .font(.system(size: 11))
                 .foregroundStyle(TPPhotosTheme.danger)
+        } else if let message = syncStore.lastSanitizeMessage {
+            Text(message)
+                .font(.system(size: 11))
+                .foregroundStyle(TPPhotosTheme.textMuted)
         }
     }
 
-    private var backupButton: some View {
-        Button {
-            Task {
-                await syncStore.backupNow(ownerEmail: ownerEmail)
-                await store.reload()
+    private var menuButton: some View {
+        Menu {
+            Button {
+                Task {
+                    await syncStore.backupNow(ownerEmail: ownerEmail)
+                    await store.reload()
+                }
+            } label: {
+                Label("Backup now", systemImage: "icloud.and.arrow.up")
+            }
+            if isAdmin {
+                Button {
+                    Task { await syncStore.sanitizeNow() }
+                } label: {
+                    Label("Sanitize", systemImage: "wand.and.stars")
+                }
             }
         } label: {
             Group {
-                if syncStore.isRunning {
+                if syncStore.isRunning || syncStore.isSanitizing {
                     ProgressView().tint(.white)
                 } else {
-                    Image(systemName: "icloud.and.arrow.up")
-                        .font(.system(size: 16, weight: .medium))
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: ellipsisIconFontSize, weight: .medium))
                         .foregroundStyle(.white)
                 }
             }
-            .frame(width: 30, height: 30)
+            .frame(width: ellipsisIconDimension, height: ellipsisIconDimension)
         }
+        .menuIndicator(.hidden)
         .buttonStyle(.glass)
         .buttonBorderShape(.circle)
-        .disabled(syncStore.isRunning)
+        .disabled(syncStore.isRunning || syncStore.isSanitizing)
     }
 
     private var filterChips: some View {
@@ -204,6 +226,24 @@ public struct PhotoGalleryView: View {
         .buttonStyle(.plain)
         .scaleEffect(x: 1, y: -1)
     }
+}
+
+// Mirrors TPStoreFeature's ellipsis Menu sizing: .buttonStyle(.glass) only adds chrome around
+// the label's own size rather than shrinking it, so the label itself must be sized small.
+private var ellipsisIconDimension: CGFloat {
+    #if os(macOS)
+    23
+    #else
+    30
+    #endif
+}
+
+private var ellipsisIconFontSize: CGFloat {
+    #if os(macOS)
+    12
+    #else
+    16
+    #endif
 }
 
 enum TPPhotosTheme {
