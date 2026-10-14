@@ -33,6 +33,8 @@ targets:
         product: TPStoreFeature
       - package: tpapp
         product: TPHomeFeature
+      - package: tpapp
+        product: TPPhotosFeature
 
   TPApp-macOS:
     type: application
@@ -58,6 +60,8 @@ targets:
         product: TPStoreFeature
       - package: tpapp
         product: TPHomeFeature
+      - package: tpapp
+        product: TPPhotosFeature
 
 schemes:
   TPApp-iOS:

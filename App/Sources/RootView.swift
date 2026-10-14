@@ -3,9 +3,10 @@ import TPCore
 import TPCloudFeature
 import TPStoreFeature
 import TPHomeFeature
+import TPPhotosFeature
 
 private enum AppTab: Hashable {
-    case store, shared, home, account
+    case store, shared, photos, home, account
 }
 
 struct RootView: View {
@@ -13,6 +14,9 @@ struct RootView: View {
     let accountClient: CloudAccountClient
     let storeClient: StoreClient
     @ObservedObject var homeStore: HomeStore
+    let photosClient: PhotosClient
+    @ObservedObject var photoGalleryStore: PhotoGalleryStore
+    @ObservedObject var photoSyncStore: PhotoSyncStore
 
     @State private var selectedTab: AppTab = .store
     @State private var storeResetSignal = 0
@@ -33,6 +37,14 @@ struct RootView: View {
                     SharedView(storeClient: storeClient, resetSignal: sharedResetSignal)
                         .tabItem { Label("Shared", systemImage: "link") }
                         .tag(AppTab.shared)
+                    PhotoGalleryView(
+                        store: photoGalleryStore,
+                        syncStore: photoSyncStore,
+                        client: photosClient,
+                        ownerEmail: profile.email
+                    )
+                        .tabItem { Label("Photos", systemImage: "photo.on.rectangle") }
+                        .tag(AppTab.photos)
                     HomeRootView(store: homeStore)
                         .tabItem { Label("Home", systemImage: "house.fill") }
                         .tag(AppTab.home)
@@ -56,7 +68,7 @@ struct RootView: View {
                     switch newValue {
                     case .store: storeResetSignal += 1
                     case .shared: sharedResetSignal += 1
-                    case .home, .account: break
+                    case .photos, .home, .account: break
                     }
                 }
                 selectedTab = newValue
@@ -76,6 +88,9 @@ struct RootView: View {
         homeStore: HomeStore(
             client: HomeClient(client: HTTPClient(baseURL: homeURL)),
             wsClient: HomeWebSocketClient(url: URL(string: "wss://tphome.migueltaibo.com/api/ws")!)
-        )
+        ),
+        photosClient: PhotosClient(client: HTTPClient(baseURL: storeURL)),
+        photoGalleryStore: PhotoGalleryStore(client: PhotosClient(client: HTTPClient(baseURL: storeURL))),
+        photoSyncStore: PhotoSyncStore(client: PhotosClient(client: HTTPClient(baseURL: storeURL)))
     )
 }
