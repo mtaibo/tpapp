@@ -45,12 +45,30 @@ public struct PhotoGalleryView: View {
                     Spacer()
                     backupButton
                 }
+                backupStatus
                 filterChips
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 14)
         }
         .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { topBarHeight = $0 }
+    }
+
+    @ViewBuilder
+    private var backupStatus: some View {
+        if syncStore.isRunning {
+            VStack(alignment: .leading, spacing: 4) {
+                ProgressView(value: syncStore.progressFraction)
+                    .tint(.white)
+                Text(syncStore.progressTotal == 0 ? "Comprobando fotos existentes…" : syncStore.progressLabel)
+                    .font(.system(size: 11))
+                    .foregroundStyle(TPPhotosTheme.textMuted)
+            }
+        } else if let error = syncStore.lastError {
+            Text(error)
+                .font(.system(size: 11))
+                .foregroundStyle(TPPhotosTheme.danger)
+        }
     }
 
     private var backupButton: some View {
@@ -135,9 +153,17 @@ public struct PhotoGalleryView: View {
                 Spacer()
             }
         } else {
+            // Inverted-list trick: the API already returns newest-first with pagination toward
+            // older items, so flipping the whole scroll view 180° (and counter-flipping each
+            // tile's content) makes the newest photo land at the visual bottom — where the
+            // ScrollView naturally rests on first appearance — and "load more" naturally extends
+            // upward off-screen with no jump, all without touching PhotoGalleryStore's ordering.
+            // Note: because the whole stack below is y-flipped, its *local* top-to-bottom order
+            // renders as the *visual* bottom-to-top order — so the grid is listed first (it ends
+            // up visually at the bottom/newest end) and the top-bar clearance spacer last (it
+            // ends up visually at the very top, under the floating toolbar).
             ScrollView {
                 VStack(spacing: 0) {
-                    Color.clear.frame(height: topBarHeight)
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), spacing: 8)], spacing: 8) {
                         ForEach(store.photos) { photo in
                             tile(for: photo)
@@ -148,10 +174,13 @@ public struct PhotoGalleryView: View {
                     .padding(.bottom, 24)
 
                     if store.isLoadingMore {
-                        ProgressView().tint(.white).padding(.bottom, 16)
+                        ProgressView().tint(.white).padding(.vertical, 16)
                     }
+
+                    Color.clear.frame(height: topBarHeight)
                 }
             }
+            .scaleEffect(x: 1, y: -1)
         }
     }
 
@@ -168,10 +197,12 @@ public struct PhotoGalleryView: View {
                     Rectangle().fill(Color.white.opacity(0.05))
                 }
             }
+            .id(photo.id)
             .frame(width: 110, height: 110)
             .clipShape(RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain)
+        .scaleEffect(x: 1, y: -1)
     }
 }
 
