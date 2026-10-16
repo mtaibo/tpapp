@@ -35,6 +35,8 @@ targets:
         product: TPHomeFeature
       - package: tpapp
         product: TPPhotosFeature
+      - package: tpapp
+        product: TPAdminFeature
 
   TPApp-macOS:
     type: application
@@ -62,6 +64,8 @@ targets:
         product: TPHomeFeature
       - package: tpapp
         product: TPPhotosFeature
+      - package: tpapp
+        product: TPAdminFeature
 
 schemes:
   TPApp-iOS:

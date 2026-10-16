@@ -1,12 +1,13 @@
 import SwiftUI
 import TPCore
+import TPAdminFeature
 import TPCloudFeature
 import TPStoreFeature
 import TPHomeFeature
 import TPPhotosFeature
 
 private enum AppTab: Hashable {
-    case store, shared, photos, home, account
+    case store, shared, photos, home, admin, account
 }
 
 struct RootView: View {
@@ -17,6 +18,7 @@ struct RootView: View {
     let photosClient: PhotosClient
     @ObservedObject var photoGalleryStore: PhotoGalleryStore
     @ObservedObject var photoSyncStore: PhotoSyncStore
+    @ObservedObject var adminStore: AdminStore
 
     @State private var selectedTab: AppTab = .store
     @State private var storeResetSignal = 0
@@ -49,6 +51,12 @@ struct RootView: View {
                     HomeRootView(store: homeStore)
                         .tabItem { Label("Home", systemImage: "house.fill") }
                         .tag(AppTab.home)
+                    // tpadmin controls the Pi itself; its API rejects non-admins anyway.
+                    if profile.isAdmin {
+                        AdminRootView(store: adminStore)
+                            .tabItem { Label("Admin", systemImage: "gauge.with.dots.needle.67percent") }
+                            .tag(AppTab.admin)
+                    }
                     AccountView(session: session, accountClient: accountClient)
                         .tabItem { Label("Account", systemImage: "person.crop.circle") }
                         .tag(AppTab.account)
@@ -89,7 +97,7 @@ struct RootView: View {
                     switch newValue {
                     case .store: storeResetSignal += 1
                     case .shared: sharedResetSignal += 1
-                    case .photos, .home, .account: break
+                    case .photos, .home, .admin, .account: break
                     }
                 }
                 selectedTab = newValue
@@ -112,6 +120,7 @@ struct RootView: View {
         ),
         photosClient: PhotosClient(client: HTTPClient(baseURL: storeURL)),
         photoGalleryStore: PhotoGalleryStore(client: PhotosClient(client: HTTPClient(baseURL: storeURL))),
-        photoSyncStore: PhotoSyncStore(client: PhotosClient(client: HTTPClient(baseURL: storeURL)))
+        photoSyncStore: PhotoSyncStore(client: PhotosClient(client: HTTPClient(baseURL: storeURL))),
+        adminStore: AdminStore(client: AdminClient(client: HTTPClient(baseURL: URL(string: "https://admin.migueltaibo.com")!)))
     )
 }

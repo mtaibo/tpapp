@@ -13,6 +13,7 @@ let package = Package(
         .library(name: "TPStoreFeature", targets: ["TPStoreFeature"]),
         .library(name: "TPHomeFeature", targets: ["TPHomeFeature"]),
         .library(name: "TPPhotosFeature", targets: ["TPPhotosFeature"]),
+        .library(name: "TPAdminFeature", targets: ["TPAdminFeature"]),
     ],
     targets: [
         .target(name: "TPCore"),
@@ -20,11 +21,13 @@ let package = Package(
         .target(name: "TPStoreFeature", dependencies: ["TPCore"]),
         .target(name: "TPHomeFeature", dependencies: ["TPCore"]),
         .target(name: "TPPhotosFeature", dependencies: ["TPCore"]),
+        .target(name: "TPAdminFeature", dependencies: ["TPCore"]),
 
         .testTarget(name: "TPCoreTests", dependencies: ["TPCore"]),
         .testTarget(name: "TPCloudFeatureTests", dependencies: ["TPCloudFeature"]),
         .testTarget(name: "TPStoreFeatureTests", dependencies: ["TPStoreFeature"]),
         .testTarget(name: "TPHomeFeatureTests", dependencies: ["TPHomeFeature"]),
         .testTarget(name: "TPPhotosFeatureTests", dependencies: ["TPPhotosFeature"]),
+        .testTarget(name: "TPAdminFeatureTests", dependencies: ["TPAdminFeature"]),
     ]
 )
