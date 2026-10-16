@@ -10,12 +10,19 @@ struct LoginView: View {
     @State private var errorMessage: String?
     @State private var isLoading = false
 
+    private let credentialStore = LoginCredentialStore()
+
     private enum Field: Hashable { case email, password, code }
     @FocusState private var focusedField: Field?
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            Color.black
+                .ignoresSafeArea()
+                // The number pad has no return key and the email keyboard can cover the button, so
+                // tapping anywhere outside the card is the way out of the keyboard.
+                .contentShape(Rectangle())
+                .onTapGesture { focusedField = nil }
 
             GlassEffectContainer {
                 Group {
@@ -43,9 +50,13 @@ struct LoginView: View {
                 .foregroundStyle(.white)
 
             field(label: "MAIL") {
+                // `.username`, not `.emailAddress`: AutoFill only pairs a saved login with the
+                // password field when the account field is marked as the username.
                 TextField("", text: $email)
-                    .textContentType(.emailAddress)
+                    .textContentType(.username)
                     .focused($focusedField, equals: .email)
+                    .submitLabel(.next)
+                    .onSubmit { focusedField = .password }
                     #if os(iOS)
                     .keyboardType(.emailAddress)
                     .textInputAutocapitalization(.never)
@@ -57,6 +68,7 @@ struct LoginView: View {
                 SecureField("••••••••", text: $password)
                     .textContentType(.password)
                     .focused($focusedField, equals: .password)
+                    .submitLabel(.go)
                     .onSubmit { Task { await login() } }
             }
 
@@ -71,7 +83,14 @@ struct LoginView: View {
             .tint(.white.opacity(0.18))
             .disabled(email.isEmpty || password.isEmpty || isLoading)
         }
-        .onAppear { focusedField = .email }
+        .onAppear {
+            if email.isEmpty, password.isEmpty, let saved = credentialStore.load() {
+                email = saved.email
+                password = saved.password
+            } else {
+                focusedField = .email
+            }
+        }
     }
 
     private func totpStep(email: String) -> some View {
@@ -82,12 +101,20 @@ struct LoginView: View {
 
             field(label: "CODE") {
                 TextField("······", text: $code)
+                    .textContentType(.oneTimeCode)
                     .focused($focusedField, equals: .code)
                     #if os(iOS)
                     .keyboardType(.numberPad)
                     #endif
                     .onChange(of: code) { _, newValue in
-                        code = String(newValue.filter(\.isNumber).prefix(6))
+                        let digits = String(newValue.filter(\.isNumber).prefix(6))
+                        if digits != newValue {
+                            code = digits // re-enters onChange with the cleaned value
+                        } else if digits.count == 6, !isLoading {
+                            // An AutoFilled code arrives all at once, and the number pad has no
+                            // return key to submit it — so a full code submits itself.
+                            Task { await verify() }
+                        }
                     }
                     .onSubmit { Task { await verify() } }
             }
@@ -160,6 +187,8 @@ struct LoginView: View {
         defer { isLoading = false }
         do {
             try await session.login(email: email, password: password)
+            // Reaching here means the server accepted the password, even if 2FA is still pending.
+            credentialStore.save(email: email, password: password)
         } catch {
             errorMessage = apiErrorMessage(error)
         }
