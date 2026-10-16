@@ -138,6 +138,10 @@ public struct HTTPClient: Sendable {
         var components = URLComponents(url: baseURL.appending(path: path), resolvingAgainstBaseURL: false)!
         if !query.isEmpty {
             components.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) }
+            // URLComponents leaves "+" literal, but the server form-decodes it as a space — which
+            // broke the photo cursor's "+00:00" offset and stopped pagination after page one.
+            components.percentEncodedQuery = components.percentEncodedQuery?
+                .replacingOccurrences(of: "+", with: "%2B")
         }
         var request = URLRequest(url: components.url!)
         request.httpMethod = method
