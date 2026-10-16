@@ -1,4 +1,5 @@
 import Foundation
+import os
 import Photos
 import TPCore
 #if os(iOS)
@@ -14,6 +15,9 @@ public final class PhotoSyncStore: ObservableObject {
     /// a run full of failures doesn't read as "100% done".
     @Published public private(set) var progressFailed = 0
     @Published public private(set) var progressTotal = 0
+    /// Why each of `progressFailed` failed, grouped by human-readable reason — the count alone
+    /// gave no way to tell an iCloud download stall from a dropped connection.
+    @Published public private(set) var failureReasons: [String: Int] = [:]
     /// v1 backs up stills only; videos found during the scan are counted here so the UI can
     /// say "N videos not included" instead of silently never mentioning them.
     @Published public private(set) var excludedVideoCount = 0
@@ -48,6 +52,13 @@ public final class PhotoSyncStore: ObservableObject {
     /// Set when iOS stops the background run of `backupNow()`, so it stops starting new uploads.
     /// A property rather than a local: the expiration callback that sets it escapes the run.
     private var stopRequested = false
+
+    /// Total tries for each network step of one photo. Transient failures (a connection the
+    /// iPhone dropped mid-upload, a 5xx from the gateway) are common over a long backup and
+    /// usually succeed on the next try, so they shouldn't count as a failed photo straight away.
+    private static let networkAttempts = 3
+
+    private static let logger = Logger(subsystem: "com.migueltaibo.tpapp", category: "PhotoBackup")
 
     public init(client: PhotosClient) {
         self.client = client
@@ -84,6 +95,7 @@ public final class PhotoSyncStore: ObservableObject {
         progressCompleted = 0
         progressFailed = 0
         progressTotal = 0
+        failureReasons = [:]
         excludedVideoCount = 0
         defer { isRunning = false }
 
@@ -161,9 +173,11 @@ public final class PhotoSyncStore: ObservableObject {
                         sessionExpired = true
                         lastError = "Tu sesión ha caducado, vuelve a iniciar sesión para continuar"
                     }
-                case .failure:
+                case .failure(let error):
                     // One bad asset shouldn't abort the whole run — it's retried on the next backupNow().
                     progressFailed += 1
+                    failureReasons[Self.failureReason(for: error), default: 0] += 1
+                    Self.logger.error("Photo backup failed: \(String(describing: error), privacy: .public)")
                 }
                 #if os(iOS)
                 continuedTask.update(completed: progressDone, total: progressTotal)
@@ -375,14 +389,17 @@ public final class PhotoSyncStore: ObservableObject {
         let filename = "\(metadata.checksum).\(PhotoBackupPlanner.fileExtension(for: metadata.originalFilename))"
         let filePath = "\(folderPath)/\(filename)"
 
-        try await client.upload(
-            path: folderPath,
-            filename: filename,
-            data: metadata.data,
-            mimeType: metadata.mimeType ?? "application/octet-stream"
-        )
+        // Retrying the upload is safe: the server overwrites the file at the same path.
+        try await withNetworkRetry {
+            try await client.upload(
+                path: folderPath,
+                filename: filename,
+                data: metadata.data,
+                mimeType: metadata.mimeType ?? "application/octet-stream"
+            )
+        }
 
-        _ = try await client.register(PhotosClient.Registration(
+        let registration = PhotosClient.Registration(
             path: filePath,
             checksum: metadata.checksum,
             originalFilename: metadata.originalFilename,
@@ -399,9 +416,53 @@ public final class PhotoSyncStore: ObservableObject {
             cameraModel: metadata.cameraModel,
             gpsLat: metadata.gpsLat,
             gpsLon: metadata.gpsLon
-        ))
+        )
+        // Also safe to retry: the server dedups registrations by checksum.
+        _ = try await withNetworkRetry { try await client.register(registration) }
 
         await PhotoThumbnailCache.ensureThumbnail(for: asset, checksum: metadata.checksum)
+    }
+
+    private func withNetworkRetry<T>(_ operation: () async throws -> T) async throws -> T {
+        var attempt = 1
+        while true {
+            do {
+                return try await operation()
+            } catch let error as APIError where attempt < Self.networkAttempts && Self.isTransient(error) {
+                Self.logger.info("Retrying after transient error: \(String(describing: error), privacy: .public)")
+                try await Task.sleep(for: .seconds(2 * attempt))
+                attempt += 1
+            }
+        }
+    }
+
+    private static func isTransient(_ error: APIError) -> Bool {
+        switch error {
+        case .transport: return true
+        case .server(let status, _): return status >= 500
+        default: return false
+        }
+    }
+
+    private static func failureReason(for error: Error) -> String {
+        switch error {
+        case PhotoMetadataExtractor.ExtractionError.timedOut:
+            return "iCloud tardó demasiado en descargar la foto"
+        case PhotoMetadataExtractor.ExtractionError.noPhotoResource:
+            return "La foto no tiene un archivo original"
+        case APIError.transport:
+            return "Conexión cortada o sin red"
+        case APIError.server(422, _):
+            return "El archivo llegó dañado al servidor"
+        case APIError.server(let status, _):
+            return "Error del servidor (\(status))"
+        case APIError.decoding, APIError.invalidResponse:
+            return "Respuesta inesperada del servidor"
+        case let error as NSError where error.domain == PHPhotosErrorDomain || error.domain == "CloudPhotoLibraryErrorDomain":
+            return "No se pudo leer la foto de la fototeca/iCloud"
+        default:
+            return "Otro error: \((error as NSError).domain) \((error as NSError).code)"
+        }
     }
 }
 

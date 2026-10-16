@@ -42,8 +42,6 @@ public enum PhotoMetadataExtractor {
     /// against this and cancels itself on expiry so the backup loop can move on.
     private static let perRequestTimeout: Duration = .seconds(90)
 
-    private struct TimeoutError: Error {}
-
     /// Runs `operation` against a timeout, invoking `onTimeout` (e.g. to cancel the underlying
     /// PhotoKit request) and throwing if the timeout wins the race.
     private static func withTimeout<T: Sendable>(
@@ -55,7 +53,7 @@ public enum PhotoMetadataExtractor {
             group.addTask {
                 try await Task.sleep(for: perRequestTimeout)
                 onTimeout()
-                throw TimeoutError()
+                throw ExtractionError.timedOut
             }
             defer { group.cancelAll() }
             return try await group.next()!

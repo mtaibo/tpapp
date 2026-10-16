@@ -166,15 +166,40 @@ public struct PhotoGalleryView: View {
                     .font(.system(size: 12))
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
+                failureList
             }
         } else if syncStore.isSanitizing {
             statusLine("Reorganizando fotos…", showsSpinner: true)
         } else if syncStore.isChecking {
             statusLine("Comprobando fotos…", showsSpinner: true)
         } else if let error = syncStore.lastError {
-            statusLine(error).foregroundStyle(TPPhotosTheme.danger)
+            VStack(alignment: .leading, spacing: 10) {
+                statusLine(error).foregroundStyle(TPPhotosTheme.danger)
+                failureList
+            }
         } else if let message = syncStore.lastSanitizeMessage ?? syncStore.lastCheckMessage {
             statusLine(message)
+        }
+    }
+
+    /// The backup's failures grouped by reason, most frequent first.
+    @ViewBuilder
+    private var failureList: some View {
+        if !syncStore.failureReasons.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(syncStore.failureReasons.sorted { $0.value > $1.value }, id: \.key) { reason, count in
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text("\(count)")
+                            .font(.system(size: 12, weight: .semibold))
+                            .monospacedDigit()
+                            .foregroundStyle(TPPhotosTheme.danger)
+                        Text(reason)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
         }
     }
 
