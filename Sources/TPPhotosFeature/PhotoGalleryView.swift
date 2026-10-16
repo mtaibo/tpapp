@@ -10,6 +10,9 @@ public struct PhotoGalleryView: View {
 
     @State private var selectedPhoto: Photo?
     @State private var topBarHeight: CGFloat = 120
+    @State private var isStatusPresented = false
+    /// The success message whose ✓ has already been shown for a few seconds and hidden.
+    @State private var dismissedMessage: String?
 
     public init(store: PhotoGalleryStore, syncStore: PhotoSyncStore, client: PhotosClient, ownerEmail: String, isAdmin: Bool = false) {
         self.store = store
@@ -45,9 +48,11 @@ public struct PhotoGalleryView: View {
                         .font(.system(size: 16, weight: .medium))
                         .foregroundStyle(.white)
                     Spacer()
+                    if hasStatus {
+                        statusButton
+                    }
                     menuButton
                 }
-                backupStatus
                 filterChips
             }
             .padding(.horizontal, 20)
@@ -56,37 +61,131 @@ public struct PhotoGalleryView: View {
         .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { topBarHeight = $0 }
     }
 
+    private var hasStatus: Bool {
+        syncStore.isRunning || syncStore.isSanitizing || syncStore.isChecking
+            || syncStore.lastError != nil
+            || (successMessage != nil && successMessage != dismissedMessage)
+    }
+
+    private var successMessage: String? {
+        syncStore.lastSanitizeMessage ?? syncStore.lastCheckMessage
+    }
+
+    /// Sits next to the ellipsis menu: a ring that fills up while a backup uploads, a spinner for
+    /// Check/Sanitize, or the last run's outcome. Tapping it explains the status in full.
+    private var isBusy: Bool {
+        syncStore.isRunning || syncStore.isSanitizing || syncStore.isChecking
+    }
+
+    private struct StatusDismissKey: Equatable {
+        let message: String?
+        let isPresented: Bool
+        let isBusy: Bool
+    }
+
+    private var statusButton: some View {
+        Button {
+            isStatusPresented.toggle()
+        } label: {
+            Group {
+                if syncStore.isRunning {
+                    progressRing
+                } else if syncStore.isSanitizing || syncStore.isChecking {
+                    ProgressView().tint(.white)
+                } else if syncStore.lastError != nil {
+                    Image(systemName: "exclamationmark")
+                        .font(.system(size: ellipsisIconFontSize, weight: .semibold))
+                        .foregroundStyle(TPPhotosTheme.danger)
+                } else {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: ellipsisIconFontSize, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+            }
+            .frame(width: ellipsisIconDimension, height: ellipsisIconDimension)
+        }
+        .buttonStyle(.glass)
+        .buttonBorderShape(.circle)
+        .task(id: StatusDismissKey(message: successMessage, isPresented: isStatusPresented, isBusy: isBusy)) {
+            // Errors stay until acted on; a plain success ✓ only lingers briefly — and never
+            // vanishes while its popover is open or another run is underway.
+            if isBusy { dismissedMessage = nil } // a new run's result may repeat the old text
+            guard let message = successMessage, syncStore.lastError == nil,
+                  !isStatusPresented, !isBusy else { return }
+            try? await Task.sleep(for: .seconds(4))
+            guard !Task.isCancelled else { return }
+            withAnimation { dismissedMessage = message }
+        }
+        .popover(isPresented: $isStatusPresented, arrowEdge: .top) {
+            statusDetail
+                .padding(16)
+                .frame(width: 280, alignment: .leading)
+                .presentationCompactAdaptation(.popover)
+        }
+    }
+
+    private var progressRing: some View {
+        ZStack {
+            Circle()
+                .stroke(Color.white.opacity(0.2), lineWidth: 2.5)
+            if syncStore.progressTotal == 0 {
+                // Still scanning/checking which photos are new: no fraction to show yet.
+                ProgressView().tint(.white).controlSize(.small)
+            } else {
+                Circle()
+                    .trim(from: 0, to: syncStore.progressFraction)
+                    .stroke(Color.white, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .animation(.easeOut, value: syncStore.progressFraction)
+            }
+        }
+        .padding(4)
+    }
+
     @ViewBuilder
-    private var backupStatus: some View {
+    private var statusDetail: some View {
         if syncStore.isRunning {
-            VStack(alignment: .leading, spacing: 4) {
-                ProgressView(value: syncStore.progressFraction)
-                    .tint(.white)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Subiendo fotos")
+                        .font(.system(size: 14, weight: .semibold))
+                    Spacer()
+                    if syncStore.progressTotal > 0 {
+                        Text("\(Int(syncStore.progressFraction * 100))%")
+                            .font(.system(size: 14, weight: .medium))
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                if syncStore.progressTotal == 0 {
+                    ProgressView().progressViewStyle(.linear)
+                } else {
+                    ProgressView(value: syncStore.progressFraction)
+                }
                 Text(syncStore.progressTotal == 0 ? "Comprobando fotos existentes…" : syncStore.progressLabel)
-                    .font(.system(size: 11))
-                    .foregroundStyle(TPPhotosTheme.textMuted)
+                    .font(.system(size: 12))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
             }
         } else if syncStore.isSanitizing {
-            Text("Reorganizando fotos…")
-                .font(.system(size: 11))
-                .foregroundStyle(TPPhotosTheme.textMuted)
+            statusLine("Reorganizando fotos…", showsSpinner: true)
         } else if syncStore.isChecking {
-            Text("Comprobando fotos…")
-                .font(.system(size: 11))
-                .foregroundStyle(TPPhotosTheme.textMuted)
+            statusLine("Comprobando fotos…", showsSpinner: true)
         } else if let error = syncStore.lastError {
-            Text(error)
-                .font(.system(size: 11))
-                .foregroundStyle(TPPhotosTheme.danger)
-        } else if let message = syncStore.lastSanitizeMessage {
-            Text(message)
-                .font(.system(size: 11))
-                .foregroundStyle(TPPhotosTheme.textMuted)
-        } else if let message = syncStore.lastCheckMessage {
-            Text(message)
-                .font(.system(size: 11))
-                .foregroundStyle(TPPhotosTheme.textMuted)
+            statusLine(error).foregroundStyle(TPPhotosTheme.danger)
+        } else if let message = syncStore.lastSanitizeMessage ?? syncStore.lastCheckMessage {
+            statusLine(message)
         }
+    }
+
+    private func statusLine(_ text: String, showsSpinner: Bool = false) -> some View {
+        HStack(spacing: 8) {
+            if showsSpinner { ProgressView().controlSize(.small) }
+            Text(text)
+                .font(.system(size: 13))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .foregroundStyle(.secondary)
     }
 
     private var menuButton: some View {
