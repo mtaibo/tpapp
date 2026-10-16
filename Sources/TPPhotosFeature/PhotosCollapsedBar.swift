@@ -25,7 +25,7 @@ private struct PhotosSectionSwitcher: View {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(isSelected ? .black : .white)
                 .padding(.horizontal, 14)
-                .padding(.vertical, 9)
+                .padding(.vertical, 13)
                 .background {
                     if isSelected {
                         Capsule()
@@ -35,6 +35,9 @@ private struct PhotosSectionSwitcher: View {
                 }
         }
         .buttonStyle(.plain)
+        // The pill behind the selected segment is the only visual cue otherwise — VoiceOver
+        // users need the state announced too, not just inferred from color/fill.
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 
@@ -61,6 +64,7 @@ public struct PhotosCollapsedBar: View {
             }
             .buttonStyle(.glass)
             .buttonBorderShape(.circle)
+            .accessibilityLabel("Show tab bar")
 
             PhotosSectionSwitcher(section: $state.section)
         }

@@ -69,6 +69,10 @@ struct RootView: View {
                 .overlay(alignment: .bottom) {
                     if selectedTab == .photos && photosTabBarState.isCollapsed {
                         PhotosCollapsedBar(state: photosTabBarState)
+                            // Hiding the tab bar frees up the space it used to reserve, so this
+                            // floating replacement has to re-add the home indicator clearance
+                            // itself — otherwise it sits flush against (or under) the indicator.
+                            .safeAreaPadding(.bottom)
                             .padding(.bottom, 8)
                             .transition(.opacity.combined(with: .move(edge: .bottom)))
                     }

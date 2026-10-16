@@ -286,18 +286,21 @@ public struct PhotoGalleryView: View {
         }
     }
 
-    /// Drives `tabBarState.isCollapsed` from scroll direction, not absolute position: scrolling
-    /// further into the grid collapses the real tab bar into `PhotosCollapsedBar`, scrolling
-    /// back toward the top (or reaching it) restores it — same as Apple's own Photos app.
+    /// Drives `tabBarState.isCollapsed` from scroll *direction* only, never absolute position —
+    /// in a lazy grid, `onScrollGeometryChange` reports offsets that get corrected as more rows
+    /// are measured, so a "snap collapsed/expanded past offset X" rule would drift; a delta
+    /// between two consecutive updates stays accurate regardless. Scrolling further into the
+    /// grid collapses the real tab bar into `PhotosCollapsedBar`; scrolling back toward the top
+    /// restores it — same as Apple's own Photos app. `onScrollGeometryChange`'s action runs off
+    /// the main actor (like `onGeometryChange`), so the actual state writes hop back to it.
     private func trackingTabBarCollapse<Content: View>(_ view: Content) -> some View {
         view.onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y }) { oldValue, newValue in
             let delta = newValue - oldValue
-            if newValue <= 24 {
-                if tabBarState.isCollapsed { withAnimation(.snappy) { tabBarState.isCollapsed = false } }
-            } else if delta > 6 {
-                if !tabBarState.isCollapsed { withAnimation(.snappy) { tabBarState.isCollapsed = true } }
-            } else if delta < -6 {
-                if tabBarState.isCollapsed { withAnimation(.snappy) { tabBarState.isCollapsed = false } }
+            guard delta > 6 || delta < -6 else { return }
+            let shouldCollapse = delta > 6
+            Task { @MainActor in
+                guard tabBarState.isCollapsed != shouldCollapse else { return }
+                withAnimation(.snappy) { tabBarState.isCollapsed = shouldCollapse }
             }
         }
     }
