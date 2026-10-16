@@ -22,6 +22,14 @@
 	<string>public.app-category.utilities</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>TPCloud backs up your photos to your own storage so you can free up space on this device.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>processing</string>
+	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.migueltaibo.tpapp.photobackup</string>
+	</array>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>

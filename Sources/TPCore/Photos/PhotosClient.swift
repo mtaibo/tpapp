@@ -11,7 +11,7 @@ public struct PhotosClient: Sendable {
         case all, screenshots, camera, shared
     }
 
-    public struct Registration: Encodable, Sendable {
+    public struct Registration: Codable, Equatable, Sendable {
         public let path: String
         public let location: String
         public let checksum: String
@@ -121,15 +121,6 @@ public struct PhotosClient: Sendable {
         let _: [String: Int] = try await client.delete("/api/photos/\(id)")
     }
 
-    public func ensurePhotoFolderExists(path: String, location: StoreLocation = .external) async throws {
-        struct Body: Encodable { let path: String; let location: String }
-        do {
-            let _: [String: String] = try await client.post("/api/files/mkdir", body: Body(path: path, location: location.rawValue))
-        } catch APIError.server(let status, _) where status == 400 {
-            // Folder already exists — fine, it only needs to exist once.
-        }
-    }
-
     public func upload(path: String, location: StoreLocation = .external, filename: String, data: Data, mimeType: String = "application/octet-stream") async throws {
         let _: [String: [String]] = try await client.upload(
             "/api/files/upload",
@@ -180,7 +171,7 @@ public struct PhotosClient: Sendable {
     }
 
     public func originalURL(for photo: Photo) -> URL {
-        var components = URLComponents(url: client.baseURL.appending(path: "/api/files/download"), resolvingAgainstBaseURL: false)!
+        var components = URLComponents(url: client.baseURL.appending(path: "/api/files/view"), resolvingAgainstBaseURL: false)!
         components.queryItems = [
             URLQueryItem(name: "path", value: photo.path),
             URLQueryItem(name: "location", value: photo.location.rawValue)

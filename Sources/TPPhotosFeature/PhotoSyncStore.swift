@@ -96,13 +96,13 @@ public final class PhotoSyncStore: ObservableObject {
             return
         }
 
-        let scan = scanImageAssets()
+        let scan = PhotoBackupPlanner.scanImageAssets()
         excludedVideoCount = scan.excludedVideoCount
         guard !scan.images.isEmpty else { return }
 
         let knownIds: Set<String>
         do {
-            knownIds = try await checkKnownAssetIds(scan.images.map(\.localIdentifier))
+            knownIds = try await PhotoBackupPlanner.checkKnownAssetIds(scan.images.map(\.localIdentifier), client: client)
         } catch {
             lastError = "No se pudo comprobar qué fotos ya existen"
             return
@@ -235,7 +235,7 @@ public final class PhotoSyncStore: ObservableObject {
             return
         }
 
-        let scan = scanImageAssets()
+        let scan = PhotoBackupPlanner.scanImageAssets()
         guard !scan.images.isEmpty else {
             lastCheckMessage = "No hay fotos en la librería"
             return
@@ -345,46 +345,10 @@ public final class PhotoSyncStore: ObservableObject {
         return result
     }
 
-    private struct AssetScan {
-        let images: [PHAsset]
-        let excludedVideoCount: Int
-    }
-
-    /// v1 backs up stills only. Sorted newest-first so a long backup makes the newest photos
-    /// (the ones visible first in the newest-at-the-bottom gallery) show up almost immediately,
-    /// instead of only after the entire backlog finishes.
-    private func scanImageAssets() -> AssetScan {
-        let options = PHFetchOptions()
-        options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-        let result = PHAsset.fetchAssets(with: options)
-
-        var images: [PHAsset] = []
-        var videoCount = 0
-        result.enumerateObjects { asset, _, _ in
-            switch asset.mediaType {
-            case .image: images.append(asset)
-            case .video: videoCount += 1
-            default: break
-            }
-        }
-        return AssetScan(images: images, excludedVideoCount: videoCount)
-    }
-
-    private func checkKnownAssetIds(_ ids: [String]) async throws -> Set<String> {
-        var known = Set<String>()
-        for batch in ids.chunked(into: 200) {
-            let result = try await client.checkExisting(assetIds: batch)
-            known.formUnion(result)
-        }
-        return known
-    }
-
     private func backup(asset: PHAsset, ownerEmail: String) async throws {
         let metadata = try await PhotoMetadataExtractor.extract(from: asset)
-        let folderPath = destinationFolder(for: metadata.takenAt, ownerEmail: ownerEmail)
-        try await client.ensurePhotoFolderExists(path: folderPath)
-
-        let filename = "\(metadata.checksum).\(fileExtension(for: metadata))"
+        let folderPath = PhotoBackupPlanner.destinationFolder(for: metadata.takenAt, ownerEmail: ownerEmail)
+        let filename = "\(metadata.checksum).\(PhotoBackupPlanner.fileExtension(for: metadata.originalFilename))"
         let filePath = "\(folderPath)/\(filename)"
 
         try await client.upload(
@@ -415,27 +379,8 @@ public final class PhotoSyncStore: ObservableObject {
 
         await PhotoThumbnailCache.ensureThumbnail(for: asset, checksum: metadata.checksum)
     }
-
-    private func destinationFolder(for takenAt: Date?, ownerEmail: String) -> String {
-        let date = takenAt ?? Date()
-        let calendar = Calendar(identifier: .gregorian)
-        let year = calendar.component(.year, from: date)
-        let month = calendar.component(.month, from: date)
-        return "photos/\(ownerEmail)/\(year)/\(String(format: "%02d", month))"
-    }
-
-    private func fileExtension(for metadata: ExtractedPhotoMetadata) -> String {
-        let ext = (metadata.originalFilename as NSString).pathExtension
-        return ext.isEmpty ? "jpg" : ext.lowercased()
-    }
 }
 
-private extension Array {
-    func chunked(into size: Int) -> [[Element]] {
-        stride(from: 0, to: count, by: size).map { Array(self[$0..<Swift.min($0 + size, count)]) }
-    }
-}
-
-private extension Date {
+extension Date {
     var tpISO8601: String { ISO8601DateFormatter().string(from: self) }
 }

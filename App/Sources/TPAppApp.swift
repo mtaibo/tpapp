@@ -21,6 +21,19 @@ struct TPAppApp: App {
     @StateObject private var photoGalleryStore = PhotoGalleryStore(client: PhotosClient(client: HTTPClient(baseURL: storeBaseURL)))
     @StateObject private var photoSyncStore = PhotoSyncStore(client: PhotosClient(client: HTTPClient(baseURL: storeBaseURL)))
 
+    #if os(iOS)
+    @UIApplicationDelegateAdaptor(PhotoBackupAppDelegate.self) private var appDelegate
+    #endif
+
+    init() {
+        // `URLSession.shared` (what `HTTPClient` uses) honors `URLCache.shared` under its default
+        // cache policy, and `/api/files/thumbnail` already serves cache-friendly
+        // `Cache-Control: max-age` responses — but the system's default cache is sized for
+        // occasional use, not a gallery grid scrolling back and forth over thousands of already-
+        // seen thumbnails. Sizing it explicitly avoids re-fetching those over the network.
+        URLCache.shared = URLCache(memoryCapacity: 50 * 1024 * 1024, diskCapacity: 500 * 1024 * 1024)
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView(

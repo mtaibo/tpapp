@@ -59,6 +59,26 @@ struct RootView: View {
             await session.restoreIfPossible()
             await homeStore.start()
         }
+        .onChange(of: session.state) { _, newState in
+            // The background upload engine has no SwiftUI view hierarchy to read `profile.email`
+            // from when iOS wakes it directly (BGProcessingTask, or a background URLSession
+            // completion) — this is the one place that keeps its persisted copy in sync with the
+            // signed-in user, as the only two events that matter (signing in, signing out) happen.
+            switch newState {
+            case .signedIn(let profile):
+                #if os(iOS)
+                PhotoBackgroundUploader.rememberSignedIn(ownerEmail: profile.email)
+                PhotoBackupScheduler.scheduleNext()
+                Task { await PhotoBackgroundUploader.shared.refill() }
+                #endif
+            case .signedOut:
+                #if os(iOS)
+                PhotoBackgroundUploader.forgetSignedIn()
+                #endif
+            case .checkingSession, .totpRequired:
+                break
+            }
+        }
     }
 
     private var tabSelection: Binding<AppTab> {
