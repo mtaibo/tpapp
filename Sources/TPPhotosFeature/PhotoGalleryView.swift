@@ -353,13 +353,12 @@ public struct PhotoGalleryView: View {
             trackingTabBarCollapse(
                 ScrollView {
                     VStack(spacing: 0) {
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), spacing: 8)], spacing: 8) {
+                        LazyVGrid(columns: gridColumns, spacing: Self.tileSpacing) {
                             ForEach(Array(store.photos.enumerated()), id: \.element.id) { index, photo in
                                 tile(for: photo)
                                     .onAppear { Task { await store.loadMoreIfNeeded(currentIndex: index) } }
                             }
                         }
-                        .padding(.horizontal, 12)
                         .padding(.bottom, 24)
 
                         if store.isLoadingMore {
@@ -370,33 +369,80 @@ public struct PhotoGalleryView: View {
                     }
                 }
                 .scaleEffect(x: 1, y: -1)
+                .gesture(pinchZoomGesture)
             )
         }
+    }
+
+    // MARK: - Pinch-to-zoom grid density
+
+    /// The column counts the pinch gesture snaps between — 1 means "one photo at a time,
+    /// stacked for a vertical scroll" (fully zoomed in), 30 is the densest zoomed-out grid.
+    private static let columnLevels = [1, 3, 5, 15, 30]
+    private static let tileSpacing: CGFloat = 1
+
+    @State private var columnLevelIndex = 1 // columnLevels[1] == 3, the grid's starting density
+
+    private var columnCount: Int { Self.columnLevels[columnLevelIndex] }
+
+    private var gridColumns: [GridItem] {
+        Array(repeating: GridItem(.flexible(), spacing: Self.tileSpacing), count: columnCount)
+    }
+
+    /// Finer-grained thumbnails as tiles grow from a 30-across grid up to a single full-width
+    /// photo, so zooming in doesn't just blow up a blurry 160px thumbnail.
+    private var thumbnailSize: Int {
+        switch columnCount {
+        case 1: return 800
+        case 3: return 300
+        case 5: return 200
+        case 15: return 120
+        default: return 80
+        }
+    }
+
+    /// Only the gesture's *direction* past a deadzone matters — one pinch steps the grid one
+    /// level denser or sparser, same as the native Photos app's own zoom levels.
+    private var pinchZoomGesture: some Gesture {
+        MagnificationGesture()
+            .onEnded { value in
+                withAnimation(.snappy) {
+                    if value > 1.15 {
+                        columnLevelIndex = max(0, columnLevelIndex - 1)
+                    } else if value < 0.85 {
+                        columnLevelIndex = min(Self.columnLevels.count - 1, columnLevelIndex + 1)
+                    }
+                }
+            }
     }
 
     private func tile(for photo: Photo) -> some View {
         Button {
             selectedPhoto = photo
         } label: {
-            Group {
-                if let cached = PhotoThumbnailCache.image(forChecksum: photo.checksum) {
-                    cached
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                } else {
-                    AsyncImage(url: client.thumbnailURL(for: photo)) { phase in
-                        if let image = phase.image {
-                            image
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                        } else {
-                            Rectangle().fill(Color.white.opacity(0.05))
+            GeometryReader { proxy in
+                Group {
+                    if let cached = PhotoThumbnailCache.image(forChecksum: photo.checksum) {
+                        cached
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                    } else {
+                        AsyncImage(url: client.thumbnailURL(for: photo, size: thumbnailSize)) { phase in
+                            if let image = phase.image {
+                                image
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                            } else {
+                                Rectangle().fill(Color.white.opacity(0.05))
+                            }
                         }
                     }
                 }
+                .id(photo.id)
+                .frame(width: proxy.size.width, height: proxy.size.width)
+                .clipped()
             }
-            .id(photo.id)
-            .frame(width: 110, height: 110)
+            .aspectRatio(1, contentMode: .fit)
             .clipShape(RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain)
