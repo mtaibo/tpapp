@@ -4,5 +4,5 @@ SWIFT_VERSION = 5.0
 MARKETING_VERSION = 0.1.0
 CURRENT_PROJECT_VERSION = 1
 
-# Xcode no longer supports the legacy shared headermap that xcodegen leaves enabled by default.
+// Xcode no longer supports the legacy shared headermap that xcodegen leaves enabled by default.
 ALWAYS_SEARCH_USER_PATHS = NO
