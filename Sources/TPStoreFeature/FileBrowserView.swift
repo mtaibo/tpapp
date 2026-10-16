@@ -104,7 +104,11 @@ public struct FileBrowserView: View {
             )
         ) {
             TextField("Name", text: $renameDraft)
-            Button("Rename") { Task { await renameSelected() } }
+            Button("Rename") {
+                let entry = renamingEntry
+                let newName = renameDraft
+                Task { await renameSelected(entry: entry, newName: newName) }
+            }
             Button("Cancel", role: .cancel) { renamingEntry = nil }
         }
         .confirmationDialog(
@@ -115,7 +119,10 @@ public struct FileBrowserView: View {
             ),
             titleVisibility: .visible
         ) {
-            Button("Delete", role: .destructive) { Task { await deleteSelected() } }
+            Button("Delete", role: .destructive) {
+                let entry = entryPendingDelete
+                Task { await deleteSelected(entry: entry) }
+            }
             Button("Cancel", role: .cancel) { entryPendingDelete = nil }
         }
         .fileImporter(isPresented: $isImportingFile, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
@@ -553,23 +560,21 @@ public struct FileBrowserView: View {
         }
     }
 
-    private func renameSelected() async {
-        guard let entry = renamingEntry else { return }
-        let newName = renameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        renamingEntry = nil
-        guard !newName.isEmpty, newName != entry.name else { return }
+    private func renameSelected(entry: FileEntry?, newName: String) async {
+        guard let entry else { return }
+        let trimmedName = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty, trimmedName != entry.name else { return }
         do {
             let entryPath = path.isEmpty ? entry.name : "\(path)/\(entry.name)"
-            try await storeClient.rename(path: entryPath, newName: newName, location: location)
+            try await storeClient.rename(path: entryPath, newName: trimmedName, location: location)
             await load()
         } catch {
             loadError = apiErrorMessage(error)
         }
     }
 
-    private func deleteSelected() async {
-        guard let entry = entryPendingDelete else { return }
-        entryPendingDelete = nil
+    private func deleteSelected(entry: FileEntry?) async {
+        guard let entry else { return }
         do {
             let entryPath = path.isEmpty ? entry.name : "\(path)/\(entry.name)"
             try await storeClient.delete(path: entryPath, location: location)
