@@ -18,6 +18,7 @@ struct RootView: View {
     let photosClient: PhotosClient
     @ObservedObject var photoGalleryStore: PhotoGalleryStore
     @ObservedObject var photoSyncStore: PhotoSyncStore
+    @ObservedObject var photosTabBarState: PhotosTabBarState
     @ObservedObject var adminStore: AdminStore
 
     @State private var selectedTab: AppTab = .store
@@ -42,12 +43,16 @@ struct RootView: View {
                     PhotoGalleryView(
                         store: photoGalleryStore,
                         syncStore: photoSyncStore,
+                        tabBarState: photosTabBarState,
                         client: photosClient,
                         ownerEmail: profile.email,
                         isAdmin: profile.isAdmin
                     )
                         .tabItem { Label("Photos", systemImage: "photo.on.rectangle") }
                         .tag(AppTab.photos)
+                        // Swapped for PhotosCollapsedBar below once scrolled — same trick the
+                        // native Photos app uses to shrink its own tab bar while browsing.
+                        .toolbar(photosTabBarState.isCollapsed ? .hidden : .visible, for: .tabBar)
                     HomeRootView(store: homeStore)
                         .tabItem { Label("Home", systemImage: "house.fill") }
                         .tag(AppTab.home)
@@ -61,11 +66,25 @@ struct RootView: View {
                         .tabItem { Label("Account", systemImage: "person.crop.circle") }
                         .tag(AppTab.account)
                 }
+                .overlay(alignment: .bottom) {
+                    if selectedTab == .photos && photosTabBarState.isCollapsed {
+                        PhotosCollapsedBar(state: photosTabBarState)
+                            .padding(.bottom, 8)
+                            .transition(.opacity.combined(with: .move(edge: .bottom)))
+                    }
+                }
             }
         }
         .task {
             await session.restoreIfPossible()
             await homeStore.start()
+        }
+        .onChange(of: selectedTab) { oldValue, newValue in
+            // Leaving Photos always hands the real tab bar back, so switching to it again (or
+            // returning here) starts from its normal, uncollapsed state.
+            if oldValue == .photos && newValue != .photos {
+                photosTabBarState.isCollapsed = false
+            }
         }
         .onChange(of: session.state) { _, newState in
             // The background upload engine has no SwiftUI view hierarchy to read `profile.email`
@@ -121,6 +140,7 @@ struct RootView: View {
         photosClient: PhotosClient(client: HTTPClient(baseURL: storeURL)),
         photoGalleryStore: PhotoGalleryStore(client: PhotosClient(client: HTTPClient(baseURL: storeURL))),
         photoSyncStore: PhotoSyncStore(client: PhotosClient(client: HTTPClient(baseURL: storeURL))),
+        photosTabBarState: PhotosTabBarState(),
         adminStore: AdminStore(client: AdminClient(client: HTTPClient(baseURL: URL(string: "https://admin.migueltaibo.com")!)))
     )
 }

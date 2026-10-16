@@ -22,6 +22,7 @@ struct TPAppApp: App {
     )
     @StateObject private var photoGalleryStore = PhotoGalleryStore(client: PhotosClient(client: HTTPClient(baseURL: storeBaseURL)))
     @StateObject private var photoSyncStore = PhotoSyncStore(client: PhotosClient(client: HTTPClient(baseURL: storeBaseURL)))
+    @StateObject private var photosTabBarState = PhotosTabBarState()
     @StateObject private var adminStore = AdminStore(client: AdminClient(client: HTTPClient(baseURL: adminBaseURL)))
 
     #if os(iOS)
@@ -47,6 +48,7 @@ struct TPAppApp: App {
                 photosClient: photosClient,
                 photoGalleryStore: photoGalleryStore,
                 photoSyncStore: photoSyncStore,
+                photosTabBarState: photosTabBarState,
                 adminStore: adminStore
             )
         }

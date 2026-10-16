@@ -4,6 +4,7 @@ import TPCore
 public struct PhotoGalleryView: View {
     @ObservedObject var store: PhotoGalleryStore
     @ObservedObject var syncStore: PhotoSyncStore
+    @ObservedObject var tabBarState: PhotosTabBarState
     let client: PhotosClient
     let ownerEmail: String
     let isAdmin: Bool
@@ -13,13 +14,21 @@ public struct PhotoGalleryView: View {
     @State private var isStatusPresented = false
     /// The success message whose ✓ has already been shown for a few seconds and hidden.
     @State private var dismissedMessage: String?
+    /// The Albums tile last tapped — independent of `tabBarState.section` so switching to
+    /// Shared and back to Gallery never loses it.
+    @State private var galleryFilter: PhotosClient.Filter = .all
 
-    public init(store: PhotoGalleryStore, syncStore: PhotoSyncStore, client: PhotosClient, ownerEmail: String, isAdmin: Bool = false) {
+    public init(store: PhotoGalleryStore, syncStore: PhotoSyncStore, tabBarState: PhotosTabBarState, client: PhotosClient, ownerEmail: String, isAdmin: Bool = false) {
         self.store = store
         self.syncStore = syncStore
+        self.tabBarState = tabBarState
         self.client = client
         self.ownerEmail = ownerEmail
         self.isAdmin = isAdmin
+    }
+
+    private var effectiveFilter: PhotosClient.Filter {
+        tabBarState.section == .shared ? .shared : galleryFilter
     }
 
     public var body: some View {
@@ -29,7 +38,11 @@ public struct PhotoGalleryView: View {
             toolbar
         }
         .task {
+            store.filter = effectiveFilter
             if store.photos.isEmpty { await store.reload() }
+        }
+        .onChange(of: effectiveFilter) { _, newValue in
+            store.filter = newValue
         }
         .sheet(item: $selectedPhoto) { photo in
             PhotoDetailView(photo: photo, client: client) {
@@ -40,20 +53,25 @@ public struct PhotoGalleryView: View {
 
     // MARK: - Toolbar
 
+    private var toolbarTitle: String {
+        switch tabBarState.section {
+        case .albums: return "Albums"
+        case .gallery: return "Photos"
+        case .shared: return "Shared"
+        }
+    }
+
     private var toolbar: some View {
         GlassEffectContainer(spacing: 10) {
-            VStack(spacing: 10) {
-                HStack {
-                    Text("Photos")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(.white)
-                    Spacer()
-                    if hasStatus {
-                        statusButton
-                    }
-                    menuButton
+            HStack {
+                Text(toolbarTitle)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(.white)
+                Spacer()
+                if hasStatus {
+                    statusButton
                 }
-                filterChips
+                menuButton
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 14)
@@ -256,44 +274,52 @@ public struct PhotoGalleryView: View {
         .disabled(syncStore.isRunning || syncStore.isSanitizing || syncStore.isChecking)
     }
 
-    private var filterChips: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(PhotosClient.Filter.allCases, id: \.self) { filter in
-                    chip(for: filter)
-                }
-            }
-        }
-    }
-
-    private func chip(for filter: PhotosClient.Filter) -> some View {
-        Button {
-            store.filter = filter
-        } label: {
-            Text(label(for: filter))
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(store.filter == filter ? .black : .white)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 7)
-        }
-        .buttonStyle(.plain)
-        .background(store.filter == filter ? Color.white : Color.white.opacity(0.1))
-        .clipShape(Capsule())
-    }
-
-    private func label(for filter: PhotosClient.Filter) -> String {
-        switch filter {
-        case .all: return "All"
-        case .screenshots: return "Screenshots"
-        case .camera: return "Camera"
-        case .shared: return "Shared"
-        }
-    }
-
     // MARK: - Content
 
     @ViewBuilder
     private var content: some View {
+        switch tabBarState.section {
+        case .albums:
+            albumsContent
+        case .gallery, .shared:
+            galleryContent
+        }
+    }
+
+    /// Drives `tabBarState.isCollapsed` from scroll direction, not absolute position: scrolling
+    /// further into the grid collapses the real tab bar into `PhotosCollapsedBar`, scrolling
+    /// back toward the top (or reaching it) restores it — same as Apple's own Photos app.
+    private func trackingTabBarCollapse<Content: View>(_ view: Content) -> some View {
+        view.onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y }) { oldValue, newValue in
+            let delta = newValue - oldValue
+            if newValue <= 24 {
+                if tabBarState.isCollapsed { withAnimation(.snappy) { tabBarState.isCollapsed = false } }
+            } else if delta > 6 {
+                if !tabBarState.isCollapsed { withAnimation(.snappy) { tabBarState.isCollapsed = true } }
+            } else if delta < -6 {
+                if tabBarState.isCollapsed { withAnimation(.snappy) { tabBarState.isCollapsed = false } }
+            }
+        }
+    }
+
+    private var albumsContent: some View {
+        trackingTabBarCollapse(
+            ScrollView {
+                VStack(spacing: 0) {
+                    Color.clear.frame(height: topBarHeight)
+                    AlbumsGridView { filter in
+                        galleryFilter = filter
+                        withAnimation(.snappy(duration: 0.25)) { tabBarState.section = .gallery }
+                    }
+                    .padding(.top, 16)
+                    .padding(.bottom, 24)
+                }
+            }
+        )
+    }
+
+    @ViewBuilder
+    private var galleryContent: some View {
         if store.isLoading && store.photos.isEmpty {
             VStack {
                 Spacer()
@@ -324,25 +350,27 @@ public struct PhotoGalleryView: View {
             // renders as the *visual* bottom-to-top order — so the grid is listed first (it ends
             // up visually at the bottom/newest end) and the top-bar clearance spacer last (it
             // ends up visually at the very top, under the floating toolbar).
-            ScrollView {
-                VStack(spacing: 0) {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), spacing: 8)], spacing: 8) {
-                        ForEach(Array(store.photos.enumerated()), id: \.element.id) { index, photo in
-                            tile(for: photo)
-                                .onAppear { Task { await store.loadMoreIfNeeded(currentIndex: index) } }
+            trackingTabBarCollapse(
+                ScrollView {
+                    VStack(spacing: 0) {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), spacing: 8)], spacing: 8) {
+                            ForEach(Array(store.photos.enumerated()), id: \.element.id) { index, photo in
+                                tile(for: photo)
+                                    .onAppear { Task { await store.loadMoreIfNeeded(currentIndex: index) } }
+                            }
                         }
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 24)
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 24)
 
-                    if store.isLoadingMore {
-                        ProgressView().tint(.white).padding(.vertical, 16)
-                    }
+                        if store.isLoadingMore {
+                            ProgressView().tint(.white).padding(.vertical, 16)
+                        }
 
-                    Color.clear.frame(height: topBarHeight)
+                        Color.clear.frame(height: topBarHeight)
+                    }
                 }
-            }
-            .scaleEffect(x: 1, y: -1)
+                .scaleEffect(x: 1, y: -1)
+            )
         }
     }
 
