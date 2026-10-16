@@ -43,6 +43,7 @@ public final class PhotoBackgroundUploader: NSObject, @unchecked Sendable {
     private let stateLock = NSLock()
     private var responseBuffers: [Int: Data] = [:]
     private var isRefilling = false
+    private var isPaused = false
     private var backgroundEventsCompletion: (() -> Void)?
 
     private lazy var session: URLSession = {
@@ -65,6 +66,14 @@ public final class PhotoBackgroundUploader: NSObject, @unchecked Sendable {
         backgroundEventsCompletion = completion
         stateLock.unlock()
         activate()
+    }
+
+    /// While a foreground "Backup now" run is uploading the same pending assets, planning new ones
+    /// here would upload every photo twice. Chunks already enqueued keep going either way.
+    public func setPaused(_ paused: Bool) {
+        stateLock.lock()
+        isPaused = paused
+        stateLock.unlock()
     }
 
     public static func rememberSignedIn(ownerEmail: String) {
@@ -151,7 +160,7 @@ public final class PhotoBackgroundUploader: NSObject, @unchecked Sendable {
     private func beginRefill() -> Bool {
         stateLock.lock()
         defer { stateLock.unlock() }
-        guard !isRefilling else { return false }
+        guard !isRefilling, !isPaused else { return false }
         isRefilling = true
         return true
     }

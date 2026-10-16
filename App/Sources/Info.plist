@@ -29,6 +29,7 @@
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
 		<string>com.migueltaibo.tpapp.photobackup</string>
+		<string>com.migueltaibo.tpapp.photobackup.continued.*</string>
 	</array>
 	<key>UILaunchScreen</key>
 	<dict/>

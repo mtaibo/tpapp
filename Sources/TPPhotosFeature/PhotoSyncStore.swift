@@ -45,6 +45,9 @@ public final class PhotoSyncStore: ObservableObject {
     /// assets (the old strictly-serial loop was the main source of "backup is very slow"),
     /// low enough not to flood the server or the device's network queue.
     private let maxConcurrentUploads = 4
+    /// Set when iOS stops the background run of `backupNow()`, so it stops starting new uploads.
+    /// A property rather than a local: the expiration callback that sets it escapes the run.
+    private var stopRequested = false
 
     public init(client: PhotosClient) {
         self.client = client
@@ -56,9 +59,8 @@ public final class PhotoSyncStore: ObservableObject {
     /// switching apps mid-run silently kills the task, which is why backups never seemed to
     /// finish. `beginBackgroundTask` buys extra time to let in-flight work land; disabling the
     /// idle timer additionally stops the screen from auto-locking while the run is in the
-    /// foreground. Not a fix for true multi-hour unattended background backup — that would need
-    /// `BGProcessingTask`, which only grants opportunistic minutes per day and isn't a realistic
-    /// way to clear a large one-time backlog; out of scope for now.
+    /// foreground. Long unattended runs are kept alive by `PhotoBackupContinuedTask`; this
+    /// remains as the fallback when the system declines that request.
     private func beginBackgroundExecution(name: String) -> () -> Void {
         var taskID: UIBackgroundTaskIdentifier = .invalid
         taskID = UIApplication.shared.beginBackgroundTask(withName: name) {
@@ -85,9 +87,18 @@ public final class PhotoSyncStore: ObservableObject {
         excludedVideoCount = 0
         defer { isRunning = false }
 
+        stopRequested = false
+
         #if os(iOS)
         let endBackgroundExecution = beginBackgroundExecution(name: "PhotoBackup")
         defer { endBackgroundExecution() }
+
+        PhotoBackgroundUploader.shared.setPaused(true)
+        defer { PhotoBackgroundUploader.shared.setPaused(false) }
+
+        let continuedTask = PhotoBackupContinuedTask()
+        continuedTask.start(onExpire: { [weak self] in self?.stopRequested = true })
+        defer { continuedTask.finish(success: lastError == nil) }
         #endif
 
         let status = await PhotoLibraryAuthorization.requestReadOnlyAccess()
@@ -110,6 +121,9 @@ public final class PhotoSyncStore: ObservableObject {
 
         let pending = scan.images.filter { !knownIds.contains($0.localIdentifier) }
         progressTotal = pending.count
+        #if os(iOS)
+        continuedTask.update(completed: 0, total: progressTotal)
+        #endif
 
         // Bounded-concurrency pool instead of one-at-a-time: each in-flight upload still goes
         // through `backup(asset:ownerEmail:)` in order pulled from `pending` (already date-sorted),
@@ -120,7 +134,7 @@ public final class PhotoSyncStore: ObservableObject {
             var iterator = pending.makeIterator()
 
             func enqueueNext() {
-                guard !sessionExpired, let asset = iterator.next() else { return }
+                guard !sessionExpired, !stopRequested, let asset = iterator.next() else { return }
                 group.addTask {
                     do {
                         try await self.backup(asset: asset, ownerEmail: ownerEmail)
@@ -151,11 +165,21 @@ public final class PhotoSyncStore: ObservableObject {
                     // One bad asset shouldn't abort the whole run — it's retried on the next backupNow().
                     progressFailed += 1
                 }
+                #if os(iOS)
+                continuedTask.update(completed: progressDone, total: progressTotal)
+                #endif
                 enqueueNext()
             }
         }
 
         guard !sessionExpired else { return }
+
+        if stopRequested {
+            // iOS (or the user, from the system progress UI) stopped the background run; what's
+            // left isn't known to the server yet, so the next backupNow() picks it up.
+            lastError = "La copia se detuvo antes de terminar, se reanudará en el próximo backup"
+            return
+        }
 
         if progressFailed > 0 {
             lastError = "\(progressFailed) foto(s) no se pudieron subir, se reintentarán en el próximo backup"
