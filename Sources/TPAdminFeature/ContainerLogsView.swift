@@ -23,6 +23,7 @@ struct ContainerLogsView: View {
                 }
                 .toggleStyle(.button)
                 .help("Actualizar cada pocos segundos")
+                .accessibilityLabel("Actualizar automáticamente")
             }
             .padding(16)
 

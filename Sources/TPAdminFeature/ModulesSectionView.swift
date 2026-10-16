@@ -174,6 +174,7 @@ struct ModulesSectionView: View {
                 .menuIndicator(.hidden)
                 .buttonStyle(.glass)
                 .buttonBorderShape(.circle)
+                .accessibilityLabel("Más acciones")
             }
         }
     }
