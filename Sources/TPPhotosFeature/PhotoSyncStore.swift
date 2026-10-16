@@ -142,11 +142,14 @@ public final class PhotoSyncStore: ObservableObject {
         // so overall progress stays close to date order while up to `maxConcurrentUploads` network
         // round-trips overlap.
         var sessionExpired = false
+        // Local mirror of `stopRequested`: `enqueueNext()` below isn't main-actor isolated, so it
+        // can't read the property itself. Synced in the results loop, which is.
+        var stopping = false
         await withTaskGroup(of: Result<Void, Error>.self) { group in
             var iterator = pending.makeIterator()
 
             func enqueueNext() {
-                guard !sessionExpired, !stopRequested, let asset = iterator.next() else { return }
+                guard !sessionExpired, !stopping, let asset = iterator.next() else { return }
                 group.addTask {
                     do {
                         try await self.backup(asset: asset, ownerEmail: ownerEmail)
@@ -182,6 +185,7 @@ public final class PhotoSyncStore: ObservableObject {
                 #if os(iOS)
                 continuedTask.update(completed: progressDone, total: progressTotal)
                 #endif
+                stopping = stopRequested
                 enqueueNext()
             }
         }
