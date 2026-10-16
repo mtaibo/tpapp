@@ -10,7 +10,7 @@ struct BlindsSectionView: View {
     var body: some View {
         ScrollView {
             if store.blinds.isEmpty {
-                ContentUnavailableView("No hay persianas disponibles", systemImage: "blinds.horizontal.closed")
+                ContentUnavailableView("No blinds available", systemImage: "blinds.horizontal.closed")
                     .padding(.top, 60)
             } else {
                 LazyVGrid(columns: columns, spacing: 16) {
@@ -48,6 +48,7 @@ private struct BlindCardView: View {
                 Circle()
                     .fill((blind.connection?.online ?? false) ? Color.green : Color.gray)
                     .frame(width: 8, height: 8)
+                    .accessibilityLabel((blind.connection?.online ?? false) ? "Online" : "Offline")
                 Text(blind.name)
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
@@ -65,9 +66,12 @@ private struct BlindCardView: View {
                 .frame(height: 180)
 
                 VStack(spacing: 8) {
-                    Button(action: onUp) { Image(systemName: "chevron.up").frame(width: 24, height: 24) }
-                    Button(action: onStop) { Image(systemName: "pause.fill").frame(width: 24, height: 24) }
-                    Button(action: onDown) { Image(systemName: "chevron.down").frame(width: 24, height: 24) }
+                    Button(action: onUp) { Image(systemName: "chevron.up").frame(width: 36, height: 36) }
+                        .accessibilityLabel("Raise")
+                    Button(action: onStop) { Image(systemName: "pause.fill").frame(width: 36, height: 36) }
+                        .accessibilityLabel("Stop")
+                    Button(action: onDown) { Image(systemName: "chevron.down").frame(width: 36, height: 36) }
+                        .accessibilityLabel("Lower")
                 }
                 .buttonStyle(.bordered)
             }
@@ -76,9 +80,15 @@ private struct BlindCardView: View {
                 TextField("0 – 100", text: $inputText)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit { commit() }
+                    .accessibilityLabel("Blind position")
+                    #if os(iOS)
+                    .keyboardType(.numberPad)
+                    #endif
                 Button(action: commit) {
                     Image(systemName: "chevron.right")
+                        .frame(width: 36, height: 36)
                 }
+                .accessibilityLabel("Set position")
             }
         }
         .padding(16)

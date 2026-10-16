@@ -56,7 +56,7 @@ public struct HomeRootView: View {
                         .font(.footnote)
                         .foregroundStyle(.red)
                     Spacer()
-                    Button("Reintentar") { Task { await store.refresh() } }
+                    Button("Retry") { Task { await store.refresh() } }
                 }
                 .padding()
             }
@@ -93,6 +93,7 @@ public struct HomeRootView: View {
                 .menuIndicator(.hidden)
                 .buttonStyle(.glass)
                 .buttonBorderShape(.circle)
+                .accessibilityLabel("Change section")
             }
             .padding(.horizontal, 20)
             .padding(.top, 14)

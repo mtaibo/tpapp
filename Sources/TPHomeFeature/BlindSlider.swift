@@ -55,6 +55,18 @@ struct BlindSlider: View {
                     .onChanged { value in onDrag(Self.position(fromY: value.location.y, height: height)) }
                     .onEnded { value in onDragEnd(Self.position(fromY: value.location.y, height: height)) }
             )
+            // The drag gesture above has no VoiceOver equivalent on its own — this exposes the
+            // same control as an adjustable element, nudged 5% per swipe up/down.
+            .accessibilityElement()
+            .accessibilityLabel("Blind position")
+            .accessibilityValue("\(position) percent")
+            .accessibilityAdjustableAction { direction in
+                switch direction {
+                case .increment: onDragEnd(min(100, position + 5))
+                case .decrement: onDragEnd(max(0, position - 5))
+                default: break
+                }
+            }
         }
     }
 

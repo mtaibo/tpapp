@@ -43,6 +43,7 @@ struct BlindControlSheet: View {
                     }
                     .buttonStyle(.glass)
                     .buttonBorderShape(.circle)
+                    .accessibilityLabel("Close")
                 }
 
                 VStack(spacing: 10) {
@@ -71,9 +72,9 @@ struct BlindControlSheet: View {
                 }
 
                 HStack(spacing: 16) {
-                    controlButton("chevron.up") { Task { await store.sendUp(blind.id) } }
-                    controlButton("pause.fill") { Task { await store.sendStop(blind.id) } }
-                    controlButton("chevron.down") { Task { await store.sendDown(blind.id) } }
+                    controlButton("chevron.up", label: "Raise") { Task { await store.sendUp(blind.id) } }
+                    controlButton("pause.fill", label: "Stop") { Task { await store.sendStop(blind.id) } }
+                    controlButton("chevron.down", label: "Lower") { Task { await store.sendDown(blind.id) } }
                 }
             }
             .padding(24)
@@ -82,7 +83,7 @@ struct BlindControlSheet: View {
         }
     }
 
-    private func controlButton(_ systemImage: String, action: @escaping () -> Void) -> some View {
+    private func controlButton(_ systemImage: String, label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
                 .font(.system(size: Self.controlIconFontSize, weight: .medium))
@@ -91,6 +92,7 @@ struct BlindControlSheet: View {
         }
         .buttonStyle(.glass)
         .buttonBorderShape(.circle)
+        .accessibilityLabel(label)
     }
 
     // Mirrors TPStoreFeature's ellipsisIconDimension/ellipsisIconFontSize exactly: the close

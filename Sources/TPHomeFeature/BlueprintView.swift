@@ -151,6 +151,13 @@ struct BlueprintView: View {
                     y: originY + (blind.map.y + blind.map.height / 2) * scale
                 )
                 .onTapGesture { onTap(blind) }
+                // The map itself (BlindsLayer/LightsLayer/WallsLayer) is drawn with Shapes and
+                // Canvas, none of it accessible on its own — without this, VoiceOver has no way
+                // to even discover a blind exists here, let alone open its controls.
+                .accessibilityElement()
+                .accessibilityLabel(blind.name)
+                .accessibilityValue("\(blind.state?.position ?? 0) percent open")
+                .accessibilityAddTraits(.isButton)
         }
     }
 }
