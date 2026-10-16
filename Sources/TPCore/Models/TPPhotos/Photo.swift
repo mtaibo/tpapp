@@ -4,7 +4,18 @@ public struct Photo: Decodable, Equatable, Sendable, Identifiable {
     }
 
     public enum SourceType: String, Decodable, Sendable {
-        case userLibrary = "user_library", cloudShared = "cloud_shared", synced, unknown
+        case userLibrary = "user_library", cloudShared = "cloud_shared", synced, unknown, recoveredOrphan = "recovered_orphan"
+
+        // Server and client deploy independently, so a server-introduced value this enum doesn't
+        // know about is a real, already-proven risk: "recovered_orphan" (set by Sanitize's
+        // orphan-file recovery pass) was missing here and made JSONDecoder throw on the *entire*
+        // page array the moment it hit that one row, silently breaking pagination for any filter
+        // that could include it. Falling back to `.unknown` instead of throwing keeps one
+        // unrecognized value from taking down decoding of every photo on the same page.
+        public init(from decoder: Decoder) throws {
+            let raw = try decoder.singleValueContainer().decode(String.self)
+            self = SourceType(rawValue: raw) ?? .unknown
+        }
     }
 
     public let id: Int

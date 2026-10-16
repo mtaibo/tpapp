@@ -22,6 +22,14 @@ public struct ExtractedPhotoMetadata: Sendable {
     public let data: Data
 }
 
+public struct LightweightPhotoMetadata: Sendable {
+    public let sourceAssetId: String
+    public let originalFilename: String?
+    public let width: Int
+    public let height: Int
+    public let takenAt: Date?
+}
+
 public enum PhotoMetadataExtractor {
     public enum ExtractionError: Error {
         case noPhotoResource
@@ -87,6 +95,22 @@ public enum PhotoMetadataExtractor {
             gpsLat: exif.gpsLat,
             gpsLon: exif.gpsLon,
             data: data
+        )
+    }
+
+    /// Cheap, network-free metadata for comparison only. `PHAssetResource.assetResources(for:)` does
+    /// NOT trigger a download (it only reads already-known resource descriptors), unlike `extract(from:)`'s
+    /// `requestData`/`requestContentEditingInput` calls — safe to call for every asset, even iCloud-only ones.
+    public static func extractLightweight(from asset: PHAsset) -> LightweightPhotoMetadata {
+        let resources = PHAssetResource.assetResources(for: asset)
+        let originalFilename = resources.first(where: { $0.type == .photo })?.originalFilename
+            ?? resources.first(where: { $0.type == .fullSizePhoto })?.originalFilename
+        return LightweightPhotoMetadata(
+            sourceAssetId: asset.localIdentifier,
+            originalFilename: originalFilename,
+            width: asset.pixelWidth,
+            height: asset.pixelHeight,
+            takenAt: asset.creationDate
         )
     }
 

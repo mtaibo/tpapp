@@ -70,11 +70,19 @@ public struct PhotoGalleryView: View {
             Text("Reorganizando fotos…")
                 .font(.system(size: 11))
                 .foregroundStyle(TPPhotosTheme.textMuted)
+        } else if syncStore.isChecking {
+            Text("Comprobando fotos…")
+                .font(.system(size: 11))
+                .foregroundStyle(TPPhotosTheme.textMuted)
         } else if let error = syncStore.lastError {
             Text(error)
                 .font(.system(size: 11))
                 .foregroundStyle(TPPhotosTheme.danger)
         } else if let message = syncStore.lastSanitizeMessage {
+            Text(message)
+                .font(.system(size: 11))
+                .foregroundStyle(TPPhotosTheme.textMuted)
+        } else if let message = syncStore.lastCheckMessage {
             Text(message)
                 .font(.system(size: 11))
                 .foregroundStyle(TPPhotosTheme.textMuted)
@@ -91,6 +99,14 @@ public struct PhotoGalleryView: View {
             } label: {
                 Label("Backup now", systemImage: "icloud.and.arrow.up")
             }
+            Button {
+                Task {
+                    await syncStore.checkNow(ownerEmail: ownerEmail)
+                    await store.reload()
+                }
+            } label: {
+                Label("Check", systemImage: "checkmark.icloud")
+            }
             if isAdmin {
                 Button {
                     Task { await syncStore.sanitizeNow() }
@@ -100,7 +116,7 @@ public struct PhotoGalleryView: View {
             }
         } label: {
             Group {
-                if syncStore.isRunning || syncStore.isSanitizing {
+                if syncStore.isRunning || syncStore.isSanitizing || syncStore.isChecking {
                     ProgressView().tint(.white)
                 } else {
                     Image(systemName: "ellipsis")
@@ -113,7 +129,7 @@ public struct PhotoGalleryView: View {
         .menuIndicator(.hidden)
         .buttonStyle(.glass)
         .buttonBorderShape(.circle)
-        .disabled(syncStore.isRunning || syncStore.isSanitizing)
+        .disabled(syncStore.isRunning || syncStore.isSanitizing || syncStore.isChecking)
     }
 
     private var filterChips: some View {
@@ -187,9 +203,9 @@ public struct PhotoGalleryView: View {
             ScrollView {
                 VStack(spacing: 0) {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), spacing: 8)], spacing: 8) {
-                        ForEach(store.photos) { photo in
+                        ForEach(Array(store.photos.enumerated()), id: \.element.id) { index, photo in
                             tile(for: photo)
-                                .onAppear { Task { await store.loadMoreIfNeeded(currentItem: photo) } }
+                                .onAppear { Task { await store.loadMoreIfNeeded(currentIndex: index) } }
                         }
                     }
                     .padding(.horizontal, 12)
@@ -210,13 +226,21 @@ public struct PhotoGalleryView: View {
         Button {
             selectedPhoto = photo
         } label: {
-            AsyncImage(url: client.thumbnailURL(for: photo)) { phase in
-                if let image = phase.image {
-                    image
+            Group {
+                if let cached = PhotoThumbnailCache.image(forChecksum: photo.checksum) {
+                    cached
                         .resizable()
                         .aspectRatio(contentMode: .fill)
                 } else {
-                    Rectangle().fill(Color.white.opacity(0.05))
+                    AsyncImage(url: client.thumbnailURL(for: photo)) { phase in
+                        if let image = phase.image {
+                            image
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                        } else {
+                            Rectangle().fill(Color.white.opacity(0.05))
+                        }
+                    }
                 }
             }
             .id(photo.id)

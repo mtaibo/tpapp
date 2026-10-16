@@ -1,6 +1,9 @@
 import Foundation
 import Photos
 import TPCore
+#if os(iOS)
+import UIKit
+#endif
 
 @MainActor
 public final class PhotoSyncStore: ObservableObject {
@@ -19,6 +22,9 @@ public final class PhotoSyncStore: ObservableObject {
 
     @Published public private(set) var isSanitizing = false
     @Published public private(set) var lastSanitizeMessage: String?
+
+    @Published public private(set) var isChecking = false
+    @Published public private(set) var lastCheckMessage: String?
 
     public var progressDone: Int { progressCompleted + progressFailed }
 
@@ -44,6 +50,29 @@ public final class PhotoSyncStore: ObservableObject {
         self.client = client
     }
 
+    #if os(iOS)
+    /// Backup/check runs do real network uploads that can easily outlast the few seconds iOS
+    /// gives a backgrounded app before suspending it — without this, locking the screen or
+    /// switching apps mid-run silently kills the task, which is why backups never seemed to
+    /// finish. `beginBackgroundTask` buys extra time to let in-flight work land; disabling the
+    /// idle timer additionally stops the screen from auto-locking while the run is in the
+    /// foreground. Not a fix for true multi-hour unattended background backup — that would need
+    /// `BGProcessingTask`, which only grants opportunistic minutes per day and isn't a realistic
+    /// way to clear a large one-time backlog; out of scope for now.
+    private func beginBackgroundExecution(name: String) -> () -> Void {
+        var taskID: UIBackgroundTaskIdentifier = .invalid
+        taskID = UIApplication.shared.beginBackgroundTask(withName: name) {
+            UIApplication.shared.endBackgroundTask(taskID)
+            taskID = .invalid
+        }
+        UIApplication.shared.isIdleTimerDisabled = true
+        return {
+            if taskID != .invalid { UIApplication.shared.endBackgroundTask(taskID) }
+            UIApplication.shared.isIdleTimerDisabled = false
+        }
+    }
+    #endif
+
     /// v1's whole sync strategy: rescan the full library every run and let `check-existing`
     /// skip known assets. Simple, with no local sync-state that could drift from the server.
     public func backupNow(ownerEmail: String) async {
@@ -55,6 +84,11 @@ public final class PhotoSyncStore: ObservableObject {
         progressTotal = 0
         excludedVideoCount = 0
         defer { isRunning = false }
+
+        #if os(iOS)
+        let endBackgroundExecution = beginBackgroundExecution(name: "PhotoBackup")
+        defer { endBackgroundExecution() }
+        #endif
 
         let status = await PhotoLibraryAuthorization.requestReadOnlyAccess()
         guard status == .authorized || status == .limited else {
@@ -129,8 +163,19 @@ public final class PhotoSyncStore: ObservableObject {
         lastBackupAt = Date()
     }
 
+    /// Polling cadence and ceiling for `sanitizeNow()`. The server job itself has no fixed
+    /// duration (it's bounded by how much of the library isn't yet at its canonical path), so
+    /// this is a generous upper bound on how long the UI will keep spinning before giving up on
+    /// *reporting* the result — the server-side job is unaffected and keeps running regardless.
+    private static let sanitizePollInterval: Duration = .seconds(3)
+    private static let sanitizePollMaxAttempts = 400
+
     /// Reorganizes the server's on-disk photo layout to match each photo's DB `taken_at`, and
     /// recovers any uploads that completed without ever being registered. Admin-only server-side.
+    /// A full pass over a large library can take minutes of file hashing, so the server runs it as
+    /// a background job rather than as part of this HTTP request (which used to time out on a
+    /// large library while the job kept mutating the DB in the background regardless) — this just
+    /// starts it and polls `/sanitize/status` until it finishes.
     public func sanitizeNow() async {
         guard !isSanitizing else { return }
         isSanitizing = true
@@ -139,15 +184,165 @@ public final class PhotoSyncStore: ObservableObject {
         defer { isSanitizing = false }
 
         do {
-            let report = try await client.sanitize(dryRun: false)
-            var message = "Reorganizadas \(report.moved), recuperadas \(report.recoveredOrphans), duplicados eliminados \(report.duplicatesRemoved)"
-            if !report.errors.isEmpty {
-                message += " · \(report.errors.count) error(es)"
+            let start = try await client.sanitize(dryRun: false)
+            if start.alreadyRunning {
+                lastSanitizeMessage = "Ya había una reorganización en curso, esperando a que termine…"
             }
-            lastSanitizeMessage = message
+
+            for _ in 0..<Self.sanitizePollMaxAttempts {
+                try await Task.sleep(for: Self.sanitizePollInterval)
+                let status = try await client.sanitizeStatus()
+                guard !status.running else { continue }
+                guard let report = status.lastReport else {
+                    lastError = "No se pudo reorganizar las fotos"
+                    return
+                }
+                var message = "Reorganizadas \(report.moved), recuperadas \(report.recoveredOrphans), duplicados eliminados \(report.duplicatesRemoved)"
+                if report.removedMissing > 0 {
+                    message += " · \(report.removedMissing) eliminada(s) por archivo no encontrado"
+                }
+                if !report.errors.isEmpty {
+                    message += " · \(report.errors.count) error(es)"
+                }
+                lastSanitizeMessage = message
+                return
+            }
+            lastError = "La reorganización sigue en curso en el servidor; vuelve a comprobarlo más tarde"
         } catch {
             lastError = "No se pudo reorganizar las fotos"
         }
+    }
+
+    /// Intensive reconciliation pass: uploads any local asset the server doesn't know about yet
+    /// (same safety net as `backupNow()`, just driven by the authoritative server list instead of
+    /// a `check-existing` id lookup), and for assets the server already has, compares cheap local
+    /// metadata against the server's record to surface drift without ever touching existing rows.
+    public func checkNow(ownerEmail: String) async {
+        guard !isChecking else { return }
+        isChecking = true
+        lastError = nil
+        lastCheckMessage = nil
+        defer { isChecking = false }
+
+        #if os(iOS)
+        let endBackgroundExecution = beginBackgroundExecution(name: "PhotoCheck")
+        defer { endBackgroundExecution() }
+        #endif
+
+        let status = await PhotoLibraryAuthorization.requestReadOnlyAccess()
+        guard status == .authorized || status == .limited else {
+            lastError = "Sin acceso a la librería de fotos"
+            return
+        }
+
+        let scan = scanImageAssets()
+        guard !scan.images.isEmpty else {
+            lastCheckMessage = "No hay fotos en la librería"
+            return
+        }
+
+        let serverMetadata: [String: PhotosClient.AssetMetadata]
+        do {
+            serverMetadata = try await fetchServerMetadata(scan.images.map(\.localIdentifier))
+        } catch {
+            lastError = "No se pudo comprobar las fotos del servidor"
+            return
+        }
+
+        var missing: [PHAsset] = []
+        var known: [PHAsset] = []
+        for asset in scan.images {
+            if serverMetadata[asset.localIdentifier] != nil {
+                known.append(asset)
+            } else {
+                missing.append(asset)
+            }
+        }
+
+        var uploaded = 0
+        var uploadFailed = 0
+        var sessionExpired = false
+        await withTaskGroup(of: Result<Void, Error>.self) { group in
+            var iterator = missing.makeIterator()
+
+            func enqueueNext() {
+                guard !sessionExpired, let asset = iterator.next() else { return }
+                group.addTask {
+                    do {
+                        try await self.backup(asset: asset, ownerEmail: ownerEmail)
+                        return .success(())
+                    } catch {
+                        return .failure(error)
+                    }
+                }
+            }
+
+            for _ in 0..<maxConcurrentUploads {
+                enqueueNext()
+            }
+
+            for await result in group {
+                switch result {
+                case .success:
+                    uploaded += 1
+                case .failure(APIError.sessionExpired):
+                    if !sessionExpired {
+                        sessionExpired = true
+                        lastError = "Tu sesión ha caducado, vuelve a iniciar sesión para continuar"
+                    }
+                case .failure:
+                    uploadFailed += 1
+                }
+                enqueueNext()
+            }
+        }
+
+        guard !sessionExpired else { return }
+
+        var mismatches: [String] = []
+        for asset in known {
+            guard let serverInfo = serverMetadata[asset.localIdentifier] else { continue }
+            let local = PhotoMetadataExtractor.extractLightweight(from: asset)
+            if let mismatch = describeMismatch(local: local, server: serverInfo) {
+                mismatches.append(mismatch)
+            }
+            await PhotoThumbnailCache.ensureThumbnail(for: asset, checksum: serverInfo.checksum)
+        }
+
+        var message = "Comprobadas \(scan.images.count) fotos"
+        if uploaded > 0 { message += " · \(uploaded) subida(s)" }
+        if uploadFailed > 0 { message += " · \(uploadFailed) con error" }
+        if !mismatches.isEmpty { message += " · \(mismatches.count) con metadatos distintos" }
+        lastCheckMessage = message
+    }
+
+    /// `takenAt` is compared with a tolerance rather than exact-string equality to absorb
+    /// ISO8601 round-trip precision differences between the server's stored value and the
+    /// device's `creationDate`, not because real drift is expected to be sub-second.
+    private func describeMismatch(local: LightweightPhotoMetadata, server: PhotosClient.AssetMetadata) -> String? {
+        var issues: [String] = []
+        if let serverWidth = server.width, local.width != serverWidth { issues.append("ancho") }
+        if let serverHeight = server.height, local.height != serverHeight { issues.append("alto") }
+        if let localName = local.originalFilename, localName != server.originalFilename {
+            issues.append("nombre")
+        }
+        if let localTakenAt = local.takenAt {
+            let serverTakenAt = server.takenAt.flatMap { ISO8601DateFormatter().date(from: $0) }
+            if let serverTakenAt, abs(localTakenAt.timeIntervalSince(serverTakenAt)) > 5 {
+                issues.append("fecha")
+            }
+        }
+        guard !issues.isEmpty else { return nil }
+        return "\(local.sourceAssetId): \(issues.joined(separator: ", "))"
+    }
+
+    private func fetchServerMetadata(_ ids: [String]) async throws -> [String: PhotosClient.AssetMetadata] {
+        var result: [String: PhotosClient.AssetMetadata] = [:]
+        for batch in ids.chunked(into: 200) {
+            let page = try await client.metadataByAsset(assetIds: batch)
+            result.merge(page) { _, new in new }
+        }
+        return result
     }
 
     private struct AssetScan {
@@ -217,6 +412,8 @@ public final class PhotoSyncStore: ObservableObject {
             gpsLat: metadata.gpsLat,
             gpsLon: metadata.gpsLon
         ))
+
+        await PhotoThumbnailCache.ensureThumbnail(for: asset, checksum: metadata.checksum)
     }
 
     private func destinationFolder(for takenAt: Date?, ownerEmail: String) -> String {

@@ -94,6 +94,25 @@ public struct PhotosClient: Sendable {
         return response.knownAssetIds
     }
 
+    public struct AssetMetadata: Decodable, Sendable {
+        public let checksum: String
+        public let takenAt: String?
+        public let width: Int?
+        public let height: Int?
+        public let originalFilename: String
+        public let fileSize: Int
+    }
+
+    /// Bulk lookup of the server's existing record for each asset id, used by the "Check"
+    /// reconciliation pass to tell apart truly-missing assets from ones that just need a
+    /// metadata comparison. An id absent from the result means the server doesn't know it.
+    public func metadataByAsset(assetIds: [String]) async throws -> [String: AssetMetadata] {
+        struct Body: Encodable { let sourceAssetIds: [String] }
+        struct Response: Decodable { let items: [String: AssetMetadata] }
+        let response: Response = try await client.post("/api/photos/metadata-by-asset", body: Body(sourceAssetIds: assetIds))
+        return response.items
+    }
+
     public func register(_ registration: Registration) async throws -> Photo {
         try await client.post("/api/photos", body: registration)
     }
@@ -134,11 +153,30 @@ public struct PhotosClient: Sendable {
         public let moved: Int
         public let recoveredOrphans: Int
         public let duplicatesRemoved: Int
+        public let removedMissing: Int
         public let errors: [String]
     }
 
-    public func sanitize(dryRun: Bool) async throws -> SanitizeReport {
+    public struct SanitizeStartResult: Decodable, Sendable {
+        public let started: Bool
+        public let alreadyRunning: Bool
+    }
+
+    public struct SanitizeStatus: Decodable, Sendable {
+        public let running: Bool
+        public let lastReport: SanitizeReport?
+    }
+
+    /// Sanitize can take minutes on a large library (every not-yet-classified file is hashed), so
+    /// the server runs it as a background job instead of blocking the request — this just starts
+    /// (or no-ops if one is already running) and returns immediately; poll `sanitizeStatus()` for
+    /// the report.
+    public func sanitize(dryRun: Bool) async throws -> SanitizeStartResult {
         try await client.post("/api/photos/sanitize", query: ["dry_run": String(dryRun)])
+    }
+
+    public func sanitizeStatus() async throws -> SanitizeStatus {
+        try await client.get("/api/photos/sanitize/status")
     }
 
     public func originalURL(for photo: Photo) -> URL {
