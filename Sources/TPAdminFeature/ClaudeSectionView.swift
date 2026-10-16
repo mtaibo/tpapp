@@ -61,7 +61,7 @@ struct ClaudeSectionView: View {
                 }
             } label: {
                 HStack(spacing: 8) {
-                    if directories.contains { store.busy.contains($0) } {
+                    if directories.contains(where: { store.busy.contains($0) }) {
                         ProgressView().controlSize(.small).tint(.white)
                     } else {
                         Image(systemName: "plus")
@@ -75,7 +75,7 @@ struct ClaudeSectionView: View {
             }
             .menuIndicator(.hidden)
             .buttonStyle(.glass)
-            .disabled(directories.contains { store.busy.contains($0) })
+            .disabled(directories.contains(where: { store.busy.contains($0) }))
         }
     }
 
