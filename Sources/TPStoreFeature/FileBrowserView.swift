@@ -208,6 +208,7 @@ public struct FileBrowserView: View {
                     .menuIndicator(.hidden)
                     .buttonStyle(.glass)
                     .buttonBorderShape(.circle)
+                    .accessibilityLabel("More actions")
                     .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { menuWidth = $0 }
                 }
             }
@@ -740,8 +741,8 @@ struct NavigationPill: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            pillButton(systemImage: "chevron.left", enabled: canGoBack, action: onBack)
-            pillButton(systemImage: "chevron.right", enabled: canGoForward, action: onForward)
+            pillButton(systemImage: "chevron.left", enabled: canGoBack, label: "Back", action: onBack)
+            pillButton(systemImage: "chevron.right", enabled: canGoForward, label: "Forward", action: onForward)
         }
         // .interactive() is the system's own press animation for a glass
         // shape (the same machinery behind .buttonStyle(.glass)), applied to
@@ -750,12 +751,13 @@ struct NavigationPill: View {
         .glassEffect(.regular.interactive(), in: .capsule)
     }
 
-    private func pillButton(systemImage: String, enabled: Bool, action: @escaping () -> Void) -> some View {
+    private func pillButton(systemImage: String, enabled: Bool, label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             toolbarIcon(systemImage, enabled: enabled)
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
+        .accessibilityLabel(label)
     }
 }
 

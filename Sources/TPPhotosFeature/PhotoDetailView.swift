@@ -68,6 +68,7 @@ public struct PhotoDetailView: View {
         }
         .buttonStyle(.glass)
         .buttonBorderShape(.circle)
+        .accessibilityLabel("Close")
     }
 
     private var deleteButton: some View {
@@ -81,5 +82,6 @@ public struct PhotoDetailView: View {
         }
         .buttonStyle(.glass)
         .buttonBorderShape(.circle)
+        .accessibilityLabel("Delete")
     }
 }

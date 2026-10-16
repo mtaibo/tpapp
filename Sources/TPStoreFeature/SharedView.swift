@@ -127,6 +127,7 @@ public struct SharedView: View {
                     .menuIndicator(.hidden)
                     .buttonStyle(.glass)
                     .buttonBorderShape(.circle)
+                    .accessibilityLabel("More actions")
                 }
             }
             .padding(.horizontal, 20)

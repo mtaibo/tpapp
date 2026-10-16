@@ -22,6 +22,9 @@ public final class PhotoSyncStore: ObservableObject {
     /// say "N videos not included" instead of silently never mentioning them.
     @Published public private(set) var excludedVideoCount = 0
     @Published public private(set) var lastError: String?
+    /// Set alongside `lastError` specifically when the failure was the Photos permission being
+    /// denied/restricted — the only case where the fix is "go change it in Settings", not retry.
+    @Published public private(set) var permissionDenied = false
     @Published public private(set) var lastBackupAt: Date?
 
     @Published public private(set) var isSanitizing = false
@@ -92,6 +95,7 @@ public final class PhotoSyncStore: ObservableObject {
         guard !isRunning else { return }
         isRunning = true
         lastError = nil
+        permissionDenied = false
         progressCompleted = 0
         progressFailed = 0
         progressTotal = 0
@@ -116,6 +120,7 @@ public final class PhotoSyncStore: ObservableObject {
         let status = await PhotoLibraryAuthorization.requestReadOnlyAccess()
         guard status == .authorized || status == .limited else {
             lastError = "Sin acceso a la librería de fotos"
+            permissionDenied = true
             return
         }
 
@@ -263,6 +268,7 @@ public final class PhotoSyncStore: ObservableObject {
         guard !isChecking else { return }
         isChecking = true
         lastError = nil
+        permissionDenied = false
         lastCheckMessage = nil
         defer { isChecking = false }
 
@@ -274,6 +280,7 @@ public final class PhotoSyncStore: ObservableObject {
         let status = await PhotoLibraryAuthorization.requestReadOnlyAccess()
         guard status == .authorized || status == .limited else {
             lastError = "Sin acceso a la librería de fotos"
+            permissionDenied = true
             return
         }
 

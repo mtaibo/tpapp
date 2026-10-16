@@ -1,5 +1,8 @@
 import SwiftUI
 import TPCore
+#if os(iOS)
+import UIKit
+#endif
 
 public struct PhotoGalleryView: View {
     @ObservedObject var store: PhotoGalleryStore
@@ -9,6 +12,7 @@ public struct PhotoGalleryView: View {
     let ownerEmail: String
     let isAdmin: Bool
 
+    @Environment(\.openURL) private var openURL
     @State private var selectedPhoto: Photo?
     @State private var topBarHeight: CGFloat = 120
     @State private var isStatusPresented = false
@@ -124,6 +128,7 @@ public struct PhotoGalleryView: View {
         }
         .buttonStyle(.glass)
         .buttonBorderShape(.circle)
+        .accessibilityLabel("Backup status")
         .task(id: StatusDismissKey(message: successMessage, isPresented: isStatusPresented, isBusy: isBusy)) {
             // Errors stay until acted on; a plain success ✓ only lingers briefly — and never
             // vanishes while its popover is open or another run is underway.
@@ -193,6 +198,12 @@ public struct PhotoGalleryView: View {
         } else if let error = syncStore.lastError {
             VStack(alignment: .leading, spacing: 10) {
                 statusLine(error).foregroundStyle(TPPhotosTheme.danger)
+                #if os(iOS)
+                if syncStore.permissionDenied, let url = URL(string: UIApplication.openSettingsURLString) {
+                    Button("Open Settings") { openURL(url) }
+                        .font(.system(size: 13, weight: .medium))
+                }
+                #endif
                 failureList
             }
         } else if let message = syncStore.lastSanitizeMessage ?? syncStore.lastCheckMessage {
@@ -272,6 +283,7 @@ public struct PhotoGalleryView: View {
         .buttonStyle(.glass)
         .buttonBorderShape(.circle)
         .disabled(syncStore.isRunning || syncStore.isSanitizing || syncStore.isChecking)
+        .accessibilityLabel("More actions")
     }
 
     // MARK: - Content
