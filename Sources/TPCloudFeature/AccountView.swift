@@ -88,7 +88,10 @@ public struct AccountView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     fieldLabel("Name")
                     HStack(spacing: 8) {
-                        glassTextField { TextField("", text: $displayNameDraft) }
+                        glassTextField(label: "Name") {
+                            TextField("", text: $displayNameDraft)
+                                .textContentType(.name)
+                        }
                         if canSaveName(profile) {
                             Button {
                                 Task { await saveDisplayName() }
@@ -124,16 +127,25 @@ public struct AccountView: View {
                 if profile.hasPassword {
                     VStack(alignment: .leading, spacing: 6) {
                         fieldLabel("Current password")
-                        glassTextField { SecureField("", text: $currentPassword) }
+                        glassTextField(label: "Current password") {
+                            SecureField("", text: $currentPassword)
+                                .textContentType(.password)
+                        }
                     }
                 }
                 VStack(alignment: .leading, spacing: 6) {
                     fieldLabel("New password")
-                    glassTextField { SecureField("", text: $newPassword) }
+                    glassTextField(label: "New password") {
+                        SecureField("", text: $newPassword)
+                            .textContentType(.newPassword)
+                    }
                 }
                 VStack(alignment: .leading, spacing: 6) {
                     fieldLabel("Confirm password")
-                    glassTextField { SecureField("", text: $confirmPassword) }
+                    glassTextField(label: "Confirm password") {
+                        SecureField("", text: $confirmPassword)
+                            .textContentType(.newPassword)
+                    }
                 }
 
                 if let passwordMessage {
@@ -173,7 +185,13 @@ public struct AccountView: View {
                 if profile.totpEnabled {
                     VStack(alignment: .leading, spacing: 6) {
                         fieldLabel("Current code")
-                        glassTextField { TextField("······", text: $totpCode) }
+                        glassTextField(label: "Current code") {
+                            TextField("······", text: $totpCode)
+                                .textContentType(.oneTimeCode)
+                                #if os(iOS)
+                                .keyboardType(.numberPad)
+                                #endif
+                        }
                     }
                     totpMessageView
                     Button {
@@ -197,7 +215,13 @@ public struct AccountView: View {
                         .foregroundStyle(Color(white: 0.5))
                     VStack(alignment: .leading, spacing: 6) {
                         fieldLabel("Confirmation code")
-                        glassTextField { TextField("······", text: $totpCode) }
+                        glassTextField(label: "Confirmation code") {
+                            TextField("······", text: $totpCode)
+                                .textContentType(.oneTimeCode)
+                                #if os(iOS)
+                                .keyboardType(.numberPad)
+                                #endif
+                        }
                     }
                     totpMessageView
                     Button {
@@ -262,6 +286,8 @@ public struct AccountView: View {
                         Text("Revoke")
                             .font(.system(size: 13))
                             .foregroundStyle(errorColor)
+                            .padding(.vertical, 10)
+                            .padding(.horizontal, 6)
                     }
                     .buttonStyle(.plain)
                 }
@@ -321,13 +347,16 @@ public struct AccountView: View {
             .foregroundStyle(Color(white: 0.45))
     }
 
-    private func glassTextField<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+    private func glassTextField<Content: View>(label: String, @ViewBuilder content: () -> Content) -> some View {
         content()
             .textFieldStyle(.plain)
             .foregroundStyle(.white)
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
             .glassEffect(.regular, in: .rect(cornerRadius: 10))
+            // `fieldLabel` above is a styled caption, not an accessible one — VoiceOver
+            // doesn't associate sibling text with a field on its own.
+            .accessibilityLabel(label)
     }
 
     private func statusBadge(_ text: String, positive: Bool) -> some View {

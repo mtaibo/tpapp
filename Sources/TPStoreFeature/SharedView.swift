@@ -26,6 +26,10 @@ public struct SharedView: View {
     @State private var isImportingFile = false
     @State private var isUploading = false
 
+    @State private var isExportingFile = false
+    @State private var downloadDocument: RawFileDocument?
+    @State private var downloadFilename = ""
+
     public init(storeClient: StoreClient, resetSignal: Int = 0) {
         self.storeClient = storeClient
         self.resetSignal = resetSignal
@@ -36,6 +40,10 @@ public struct SharedView: View {
             TPStoreTheme.background.ignoresSafeArea()
             content
             toolbar
+            if isUploading {
+                Color.black.opacity(0.3).ignoresSafeArea()
+                ProgressView().tint(.white)
+            }
         }
         #if os(macOS)
         .frame(minWidth: 640, minHeight: 540)
@@ -54,6 +62,16 @@ public struct SharedView: View {
             case .success(let urls):
                 Task { await upload(urls) }
             case .failure(let error):
+                loadError = error.localizedDescription
+            }
+        }
+        .fileExporter(
+            isPresented: $isExportingFile,
+            document: downloadDocument,
+            contentType: .data,
+            defaultFilename: downloadFilename
+        ) { result in
+            if case .failure(let error) = result {
                 loadError = error.localizedDescription
             }
         }
@@ -220,6 +238,7 @@ public struct SharedView: View {
             guard entry.isDirectory else { return }
             navigate(to: "\(path)/\(entry.name)")
         }
+        .contextMenu { downloadMenuItem(entry) }
     }
 
     private func galleryTile(_ entry: FileEntry) -> some View {
@@ -248,6 +267,18 @@ public struct SharedView: View {
                 guard entry.isDirectory else { return }
                 navigate(to: "\(path)/\(entry.name)")
             }
+            .contextMenu { downloadMenuItem(entry) }
+    }
+
+    /// Tapping a file entry here was a silent no-op (only folders navigate) — this gives it
+    /// somewhere to go, the same "Download"/"Download as zip" action `FileBrowserView` offers.
+    @ViewBuilder
+    private func downloadMenuItem(_ entry: FileEntry) -> some View {
+        if entry.isDirectory {
+            Button("Download as zip") { Task { await startDownloadZip(entry) } }
+        } else {
+            Button("Download") { Task { await startDownload(entry) } }
+        }
     }
 
     private func shareRow(_ share: TPCore.ShareLink) -> some View {
@@ -280,9 +311,10 @@ public struct SharedView: View {
                     Image(systemName: copiedToken == share.token ? "checkmark" : "doc.on.doc")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(copiedToken == share.token ? TPStoreTheme.success : TPStoreTheme.copyIdle)
-                        .frame(width: 28, height: 28)
+                        .frame(width: 36, height: 36)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Copy link")
 
                 Button {
                     Task { await delete(share) }
@@ -290,9 +322,10 @@ public struct SharedView: View {
                     Image(systemName: "trash")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(TPStoreTheme.danger)
-                        .frame(width: 28, height: 28)
+                        .frame(width: 36, height: 36)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Delete link")
             }
 
             if share.hasPassword || share.editable || share.isPublic {
@@ -420,6 +453,28 @@ public struct SharedView: View {
             }
         }
         await load()
+    }
+
+    private func startDownload(_ entry: FileEntry) async {
+        do {
+            let data = try await storeClient.download(path: "\(path)/\(entry.name)", location: .external)
+            downloadDocument = RawFileDocument(data: data)
+            downloadFilename = entry.name
+            isExportingFile = true
+        } catch {
+            loadError = apiErrorMessage(error)
+        }
+    }
+
+    private func startDownloadZip(_ entry: FileEntry) async {
+        do {
+            let data = try await storeClient.downloadZip(path: "\(path)/\(entry.name)", location: .external)
+            downloadDocument = RawFileDocument(data: data)
+            downloadFilename = "\(entry.name).zip"
+            isExportingFile = true
+        } catch {
+            loadError = apiErrorMessage(error)
+        }
     }
 
     private func mimeType(for url: URL) -> String {

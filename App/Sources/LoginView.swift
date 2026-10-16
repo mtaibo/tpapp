@@ -49,7 +49,7 @@ struct LoginView: View {
                 .font(.system(size: 20, weight: .semibold))
                 .foregroundStyle(.white)
 
-            field(label: "MAIL") {
+            field(label: "MAIL", accessibilityLabel: "Email") {
                 // `.username`, not `.emailAddress`: AutoFill only pairs a saved login with the
                 // password field when the account field is marked as the username.
                 TextField("", text: $email)
@@ -99,7 +99,7 @@ struct LoginView: View {
                 .font(.system(size: 20, weight: .semibold))
                 .foregroundStyle(.white)
 
-            field(label: "CODE") {
+            field(label: "CODE", accessibilityLabel: "Verification code") {
                 TextField("······", text: $code)
                     .textContentType(.oneTimeCode)
                     .focused($focusedField, equals: .code)
@@ -153,7 +153,7 @@ struct LoginView: View {
         }
     }
 
-    private func field<Content: View>(label: String, @ViewBuilder content: () -> Content) -> some View {
+    private func field<Content: View>(label: String, accessibilityLabel: String? = nil, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(label)
                 .font(.system(size: 11, weight: .medium))
@@ -165,6 +165,9 @@ struct LoginView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
                 .glassEffect(.regular, in: .rect(cornerRadius: 10))
+                // The caption above is a styled label, not an accessible one (VoiceOver
+                // doesn't associate sibling text with a field on its own).
+                .accessibilityLabel(accessibilityLabel ?? label)
         }
     }
 

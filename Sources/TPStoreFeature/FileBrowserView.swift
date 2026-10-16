@@ -82,7 +82,7 @@ public struct FileBrowserView: View {
             TPStoreTheme.background.ignoresSafeArea()
             content
             toolbar
-            if isPreviewLoading {
+            if isPreviewLoading || isUploading {
                 Color.black.opacity(0.3).ignoresSafeArea()
                 ProgressView().tint(.white)
             }
@@ -367,9 +367,14 @@ public struct FileBrowserView: View {
                 }
                 .buttonStyle(RowPressButtonStyle())
             } else {
-                row.onTapGesture(count: 2) {
-                    openPreview(entry)
-                }
+                row
+                    .onTapGesture(count: 2) { openPreview(entry) }
+                    // A bare multi-tap gesture isn't exposed to VoiceOver on its own —
+                    // its activation (double-tap) needs an explicit accessible action,
+                    // and combining the row's children avoids it reading as 2-3 separate stops.
+                    .accessibilityElement(children: .combine)
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityAction { openPreview(entry) }
             }
         }
         .contextMenu { contextMenuItems(entry) }
@@ -417,9 +422,11 @@ public struct FileBrowserView: View {
                 }
                 .buttonStyle(RowPressButtonStyle())
             } else {
-                tile.onTapGesture(count: 2) {
-                    openPreview(entry)
-                }
+                tile
+                    .onTapGesture(count: 2) { openPreview(entry) }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityAction { openPreview(entry) }
             }
         }
         .contextMenu { contextMenuItems(entry) }
@@ -784,7 +791,7 @@ enum TPStoreTheme {
     static let copyIdle = Color(red: 0.388, green: 0.388, blue: 0.4)
 }
 
-private struct RawFileDocument: FileDocument {
+struct RawFileDocument: FileDocument {
     static var readableContentTypes: [UTType] { [.data] }
 
     var data: Data

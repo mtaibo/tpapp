@@ -83,6 +83,7 @@ struct ShareSheetView: View {
                     .foregroundStyle(TPStoreTheme.textMuted)
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Close")
         }
         .padding(.init(top: 18, leading: 20, bottom: 14, trailing: 20))
     }
@@ -98,13 +99,16 @@ struct ShareSheetView: View {
             if !isHidden {
                 VStack(alignment: .leading, spacing: 6) {
                     fieldLabel("Custom slug")
-                    glassTextField { TextField("my-link", text: $slug) }
+                    glassTextField(label: "Custom slug") { TextField("my-link", text: $slug) }
                 }
             }
 
             VStack(alignment: .leading, spacing: 6) {
                 fieldLabel("Password (optional)")
-                glassTextField { SecureField("", text: $password) }
+                glassTextField(label: "Password") {
+                    SecureField("", text: $password)
+                        .textContentType(.newPassword)
+                }
             }
 
             Toggle("Allow edits", isOn: $editable)
@@ -166,6 +170,7 @@ struct ShareSheetView: View {
                 )
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     // MARK: - Existing
@@ -209,9 +214,10 @@ struct ShareSheetView: View {
                     Image(systemName: copiedToken == share.token ? "checkmark" : "doc.on.doc")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(copiedToken == share.token ? TPStoreTheme.success : TPStoreTheme.copyIdle)
-                        .frame(width: 28, height: 28)
+                        .frame(width: 36, height: 36)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Copy link")
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
@@ -235,6 +241,7 @@ struct ShareSheetView: View {
                     Text("Delete")
                         .font(.system(size: 11.5))
                         .foregroundStyle(TPStoreTheme.danger)
+                        .padding(.vertical, 8)
                 }
                 .buttonStyle(.plain)
             }
@@ -267,7 +274,7 @@ struct ShareSheetView: View {
             .foregroundStyle(TPStoreTheme.textMuted)
     }
 
-    private func glassTextField<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+    private func glassTextField<Content: View>(label: String, @ViewBuilder content: () -> Content) -> some View {
         content()
             .textFieldStyle(.plain)
             .font(.system(size: 13))
@@ -282,6 +289,8 @@ struct ShareSheetView: View {
                 RoundedRectangle(cornerRadius: 8)
                     .strokeBorder(TPStoreTheme.urlRowBorder, lineWidth: 0.5)
             )
+            // `fieldLabel` above is a styled caption, not an accessible one.
+            .accessibilityLabel(label)
     }
 
     // MARK: - Actions
