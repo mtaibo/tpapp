@@ -26,6 +26,7 @@ struct RootView: View {
     @State private var selectedTab: AppTab = .store
     @State private var storeResetSignal = 0
     @State private var moreResetSignal = 0
+    @State private var photosScrollSignal = 0
 
     var body: some View {
         Group {
@@ -82,7 +83,8 @@ struct RootView: View {
                     syncStore: photoSyncStore,
                     client: photosClient,
                     ownerEmail: profile.email,
-                    isAdmin: profile.isAdmin
+                    isAdmin: profile.isAdmin,
+                    scrollToBottomSignal: photosScrollSignal
                 )
             }
             Tab("Home", systemImage: "house", value: AppTab.home) {
@@ -116,7 +118,9 @@ struct RootView: View {
                     switch newValue {
                     case .store: storeResetSignal += 1
                     case .more: moreResetSignal += 1
-                    case .photos, .home: break
+                    // Photos keeps its newest photos at the bottom, so "back to the start" is down.
+                    case .photos: photosScrollSignal += 1
+                    case .home: break
                     }
                 }
                 selectedTab = newValue

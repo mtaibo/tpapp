@@ -24,6 +24,7 @@ public struct PhotoGalleryView: View {
     let client: PhotosClient
     let ownerEmail: String
     let isAdmin: Bool
+    let scrollToBottomSignal: Int
 
     @Environment(\.openURL) private var openURL
     @State private var section: PhotosSection = .library
@@ -36,9 +37,17 @@ public struct PhotoGalleryView: View {
     @State private var dismissedMessage: String?
 
     /// Shared with `PhotoGrid`, which owns pinch-to-zoom; the menu's Zoom In/Out write it too.
-    @AppStorage(PhotoGridDensity.storageKey) private var columnLevel = 1
+    @AppStorage(PhotoGridDensity.storageKey) private var columnLevel = 0
 
-    public init(store: PhotoGalleryStore, syncStore: PhotoSyncStore, client: PhotosClient, ownerEmail: String, isAdmin: Bool = false) {
+    public init(
+        store: PhotoGalleryStore,
+        syncStore: PhotoSyncStore,
+        client: PhotosClient,
+        ownerEmail: String,
+        isAdmin: Bool = false,
+        scrollToBottomSignal: Int = 0
+    ) {
+        self.scrollToBottomSignal = scrollToBottomSignal
         self.store = store
         self.syncStore = syncStore
         self.client = client
@@ -258,9 +267,8 @@ public struct PhotoGalleryView: View {
             PhotoGrid(
                 photos: store.photos,
                 client: client,
-                isLoadingMore: store.isLoadingMore,
-                onSelect: { detailPhotoID = $0.id },
-                onReachOlder: { index in Task { await store.loadMoreIfNeeded(currentIndex: index) } }
+                scrollToBottomSignal: scrollToBottomSignal,
+                onSelect: { detailPhotoID = $0.id }
             )
             .refreshable { await store.reload() }
         }

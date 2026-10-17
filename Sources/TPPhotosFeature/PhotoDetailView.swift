@@ -155,6 +155,21 @@ private struct ZoomablePhoto: View {
                     .resizable()
                     .scaledToFit()
             } else {
+                // The on-device thumbnail while the original downloads, like Photos' blurry-then-sharp.
+                // Thumbnails are square crops, so fill a frame with the photo's real proportions
+                // to avoid a jump when the original arrives.
+                if let thumbnail = PhotoThumbnailCache.cachedImage(for: photo),
+                   let width = photo.width, let height = photo.height, width > 0, height > 0 {
+                    Color.clear
+                        .aspectRatio(CGFloat(width) / CGFloat(height), contentMode: .fit)
+                        .overlay {
+                            thumbnail
+                                .resizable()
+                                .scaledToFill()
+                        }
+                        .clipped()
+                        .blur(radius: 8)
+                }
                 ProgressView()
                     .tint(.white)
             }
@@ -183,13 +198,7 @@ private struct ZoomablePhoto: View {
             offset = .zero
         }
         .task(id: photo.id) {
-            // From this device's library when the photo is on it (instant, and no multi-megabyte
-            // download); from the server otherwise.
-            if let local = await PhotoThumbnailLoader.shared.localFullImage(for: photo, pixels: 3000) {
-                original = local
-            } else {
-                original = await Self.loadOriginal(client.originalURL(for: photo))
-            }
+            original = await Self.loadOriginal(client.originalURL(for: photo))
         }
         .accessibilityElement()
         .accessibilityLabel(photo.isScreenshot ? "Screenshot" : "Photo")

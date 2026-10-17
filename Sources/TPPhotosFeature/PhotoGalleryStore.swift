@@ -1,124 +1,89 @@
 import Foundation
 import TPCore
 
+/// The gallery's photo list. Like the Photos app, it shows what's stored on the device straight
+/// away and syncs with the server in the background:
+///
+/// - Each filter's list is saved to disk, so opening the tab (or switching filter) shows the last
+///   known photos instantly, with no network round trip.
+/// - A sync pulls every page, but publishes once at the end (plus the first page when nothing was
+///   on screen yet). Publishing after every page used to re-render the whole grid dozens of times
+///   while it loaded.
+/// - Once the list is in, any photo without an on-device thumbnail gets one downloaded in the
+///   background.
 @MainActor
 public final class PhotoGalleryStore: ObservableObject {
     @Published public private(set) var photos: [Photo] = []
+    /// True only while there's nothing to show yet; a sync behind an existing list is silent.
     @Published public private(set) var isLoading = false
-    @Published public private(set) var isLoadingMore = false
+    @Published public private(set) var isSyncing = false
     @Published public var errorMessage: String?
     @Published public var filter: PhotosClient.Filter = .all {
         didSet {
             guard oldValue != filter else { return }
+            photos = []
             Task { await reload() }
         }
     }
 
     private let client: PhotosClient
-    private var nextCursor: String?
-    private var hasMore = true
     private var generation = 0
-    private var backgroundFetchTask: Task<Void, Never>?
-    private var thumbnailPrefetchTask: Task<Void, Never>?
+    private var thumbnailTask: Task<Void, Never>?
+    /// The server's maximum page size.
+    private static let pageSize = 200
 
     public init(client: PhotosClient) {
         self.client = client
     }
 
     public func reload() async {
-        // Cancel any in-flight background drain unconditionally — not just on filter change —
-        // since "Backup now"/"Check" call reload() directly for the *same* filter while a prior
-        // drain may still be running; without this, a stale page from the old drain could land
-        // after this reload has already reset nextCursor/hasMore/photos.
-        backgroundFetchTask?.cancel()
-        thumbnailPrefetchTask?.cancel()
         generation += 1
         let myGeneration = generation
         let requestedFilter = filter
-        isLoading = true
+        thumbnailTask?.cancel()
+
+        if photos.isEmpty {
+            // Off the main thread: a big library's list is several megabytes of JSON.
+            let cached = await Task.detached(priority: .userInitiated) { PhotoIndexCache.load(filter: requestedFilter) }.value
+            guard myGeneration == generation else { return }
+            if let cached { photos = cached }
+        }
+        isLoading = photos.isEmpty
+        isSyncing = true
         errorMessage = nil
-        nextCursor = nil
-        hasMore = true
-        defer { isLoading = false }
+        defer {
+            if myGeneration == generation {
+                isLoading = false
+                isSyncing = false
+            }
+        }
 
+        var all: [Photo] = []
+        var cursor: String?
         do {
-            let page = try await client.list(filter: requestedFilter, cursor: nil)
-            guard myGeneration == generation else { return }
-            photos = page.items
-            nextCursor = page.nextCursor
-            hasMore = page.nextCursor != nil
-            if hasMore {
-                backgroundFetchTask = Task { [weak self] in
-                    await self?.drainRemainingPages(generation: myGeneration)
-                    self?.startThumbnailPrefetch(generation: myGeneration)
+            repeat {
+                let page = try await client.list(filter: requestedFilter, cursor: cursor, limit: Self.pageSize)
+                guard myGeneration == generation else { return }
+                all.append(contentsOf: page.items)
+                cursor = page.nextCursor
+                if photos.isEmpty {
+                    photos = all
+                    isLoading = false
                 }
-            } else {
-                startThumbnailPrefetch(generation: myGeneration)
-            }
+            } while cursor != nil
         } catch {
             guard myGeneration == generation else { return }
-            hasMore = false // nothing left to retry without a cursor until the next reload()
-            errorMessage = apiErrorMessage(error)
+            // Keep showing the stored list; only report the error if there's nothing at all.
+            if photos.isEmpty { errorMessage = apiErrorMessage(error) }
+            return
         }
-    }
 
-    /// Runs after every successful reload(), independent of scrolling/onAppear, until hasMore is
-    /// false — this is what guarantees the full list is always reached, not viewport timing.
-    /// Metadata-only pages (no image bytes): a plain sequential loop with no artificial delay is
-    /// fine, each iteration already waits on a real network round trip.
-    private func drainRemainingPages(generation myGeneration: Int) async {
-        while !Task.isCancelled, myGeneration == generation, hasMore {
-            let cursorBeforeFetch = nextCursor
-            await loadMore()
-            guard myGeneration == generation else { return }
-            if nextCursor == cursorBeforeFetch {
-                // loadMore() made no progress (errorMessage already set) — stop instead of
-                // spinning; a later onAppear-triggered loadMoreIfNeeded can still retry.
-                break
-            }
-        }
-    }
+        if all != photos { photos = all }
+        Task.detached(priority: .utility) { PhotoIndexCache.save(all, filter: requestedFilter) }
 
-    /// Optional optimization only: completeness no longer depends on this firing — the
-    /// background drain started by reload() guarantees the full list is reached regardless of
-    /// scrolling. This just lets a near-bottom scroll nudge a fetch sooner than the drain would
-    /// get to it on its own.
-    private static let prefetchWindow = 40
-
-    public func loadMoreIfNeeded(currentIndex index: Int) async {
-        guard hasMore, !isLoadingMore, !isLoading else { return }
-        guard index >= photos.count - Self.prefetchWindow else { return }
-        await loadMore()
-    }
-
-    private func loadMore() async {
-        guard let cursor = nextCursor, hasMore, !isLoadingMore else { return }
-        let myGeneration = generation
-        let requestedFilter = filter
-        isLoadingMore = true
-        defer { isLoadingMore = false }
-
-        do {
-            let page = try await client.list(filter: requestedFilter, cursor: cursor)
-            guard myGeneration == generation else { return }
-            photos.append(contentsOf: page.items)
-            nextCursor = page.nextCursor
-            hasMore = page.nextCursor != nil
-        } catch {
-            guard myGeneration == generation else { return }
-            errorMessage = apiErrorMessage(error)
-        }
-    }
-
-    /// Once the full list is in, fills the on-disk thumbnail cache for every photo that isn't on
-    /// this device, so later scrolling never waits on the server.
-    private func startThumbnailPrefetch(generation myGeneration: Int) {
-        guard myGeneration == generation, !hasMore else { return }
-        let photos = self.photos
         let client = self.client
-        thumbnailPrefetchTask?.cancel()
-        thumbnailPrefetchTask = Task.detached(priority: .background) {
-            await PhotoThumbnailLoader.shared.prefetch(photos, client: client)
+        thumbnailTask = Task.detached(priority: .background) {
+            await PhotoThumbnailCache.downloadMissing(all, client: client)
         }
     }
 
@@ -126,8 +91,30 @@ public final class PhotoGalleryStore: ObservableObject {
         do {
             try await client.delete(id: photo.id)
             photos.removeAll { $0.id == photo.id }
+            let remaining = photos
+            let filter = self.filter
+            Task.detached(priority: .utility) { PhotoIndexCache.save(remaining, filter: filter) }
         } catch {
             errorMessage = apiErrorMessage(error)
         }
+    }
+}
+
+/// Each filter's last synced photo list, as a file in Application Support.
+enum PhotoIndexCache {
+    private static func url(for filter: PhotosClient.Filter) -> URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        return base.appendingPathComponent("PhotoIndex-\(filter.rawValue).json")
+    }
+
+    static func load(filter: PhotosClient.Filter) -> [Photo]? {
+        guard let data = try? Data(contentsOf: url(for: filter)) else { return nil }
+        return try? JSONDecoder().decode([Photo].self, from: data)
+    }
+
+    static func save(_ photos: [Photo], filter: PhotosClient.Filter) {
+        guard let data = try? JSONEncoder().encode(photos) else { return }
+        try? data.write(to: url(for: filter), options: .atomic)
     }
 }

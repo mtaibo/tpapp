@@ -1,9 +1,10 @@
-public struct Photo: Decodable, Equatable, Sendable, Identifiable {
-    public enum Status: String, Decodable, Sendable {
+/// `Codable` (not just `Decodable`) so the gallery can keep its list on disk between launches.
+public struct Photo: Codable, Equatable, Sendable, Identifiable {
+    public enum Status: String, Codable, Sendable {
         case pending, verified, checksumMismatch = "checksum_mismatch", error
     }
 
-    public enum SourceType: String, Decodable, Sendable {
+    public enum SourceType: String, Codable, Sendable {
         case userLibrary = "user_library", cloudShared = "cloud_shared", synced, unknown, recoveredOrphan = "recovered_orphan"
 
         // Server and client deploy independently, so a server-introduced value this enum doesn't

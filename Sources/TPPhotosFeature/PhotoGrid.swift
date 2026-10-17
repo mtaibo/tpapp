@@ -6,9 +6,11 @@ import UIKit
 #endif
 
 /// The photo grid's density levels. One pinch steps one level, like the native Photos app.
+/// No single-column level: tiles only ever show the small on-device thumbnail, which would look
+/// blurry stretched to the full width — opening a photo is how to see it large.
 enum PhotoGridDensity {
-    static let columnLevels = [1, 3, 5, 9, 15]
-    static let storageKey = "photos.columnLevel"
+    static let columnLevels = [3, 5, 9, 15]
+    static let storageKey = "photos.columnLevel.v2"
 
     static func columns(forLevel level: Int) -> Int {
         columnLevels[min(max(level, 0), columnLevels.count - 1)]
@@ -32,49 +34,30 @@ struct PhotoGrid: View {
     /// Newest first, as the server pages them.
     let photos: [Photo]
     let client: PhotosClient
-    let isLoadingMore: Bool
+    /// Bumped when the Photos tab is tapped again, to jump to the newest photos at the bottom.
+    let scrollToBottomSignal: Int
     let onSelect: (Photo) -> Void
-    /// Called as rows near the top (the oldest loaded photos) appear, with the store index of
-    /// the oldest photo in that row.
-    let onReachOlder: (Int) -> Void
 
-    @AppStorage(PhotoGridDensity.storageKey) private var columnLevel = 1
+    @AppStorage(PhotoGridDensity.storageKey) private var columnLevel = 0
     @State private var scrollPosition = ScrollPosition(idType: Int.self)
     /// Written on every scroll frame, so it must not be `@State`: re-rendering the grid that
     /// often is what froze the whole app when entering Photos.
     @State private var visibleRows = VisibleRows()
     @State private var pinchConsumed = false
-    @State private var containerWidth: CGFloat = 400
-    @Environment(\.displayScale) private var displayScale
 
     private var columns: Int { PhotoGridDensity.columns(forLevel: columnLevel) }
     private var spacing: CGFloat { columns >= 9 ? 1 : 2 }
-
-    /// The tile's real size in pixels, so each zoom level asks for just enough resolution.
-    private var tilePixels: Int {
-        Int((containerWidth / CGFloat(columns)) * displayScale)
-    }
 
     var body: some View {
         let rows = Self.rows(from: photos, columns: columns)
         ScrollView {
             LazyVStack(spacing: spacing) {
-                ForEach(Array(rows.enumerated()), id: \.element.id) { offset, row in
+                ForEach(rows) { row in
                     rowView(row)
-                        .onAppear {
-                            guard offset < 8 else { return }
-                            // Store index of this row's oldest photo.
-                            onReachOlder(min(photos.count - 1, (rows.count - 1 - offset) * columns + columns - 1))
-                        }
                 }
             }
             .scrollTargetLayout()
-
-            if isLoadingMore {
-                ProgressView().padding()
-            }
         }
-        .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { containerWidth = $0 }
         .scrollPosition($scrollPosition)
         // Open on the newest photos, and keep the view still while older rows are added above.
         .defaultScrollAnchor(.bottom)
@@ -87,6 +70,14 @@ struct PhotoGrid: View {
         .simultaneousGesture(pinchGesture)
         .onChange(of: columnLevel) { oldLevel, _ in
             keepCenteredPhoto(previousColumns: PhotoGridDensity.columns(forLevel: oldLevel))
+        }
+        .onChange(of: scrollToBottomSignal) {
+            // The system's own "tap the tab again" scroll-to-top fires too; going to the bottom a
+            // beat later makes sure ours is the one that wins.
+            Task {
+                try? await Task.sleep(for: .milliseconds(80))
+                withAnimation(.snappy) { scrollPosition.scrollTo(edge: .bottom) }
+            }
         }
     }
 
@@ -109,7 +100,7 @@ struct PhotoGrid: View {
             Color.clear
                 .aspectRatio(1, contentMode: .fit)
                 .overlay {
-                    PhotoThumbnail(photo: photo, pixelSize: tilePixels, client: client)
+                    PhotoThumbnail(photo: photo, client: client)
                 }
                 .clipShape(.rect(cornerRadius: columns >= 9 ? 0 : 4))
                 .contentShape(.rect)
