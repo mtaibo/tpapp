@@ -29,6 +29,8 @@ final class PhotoGridZoomController: NSObject {
         let pivot: CGPoint
         /// The frozen grid being left.
         let snapshot: UIView
+        /// Fades the snapshot only over the new grid's footprint (see `startSession`).
+        let fadeMask: CAGradientLayer
         let offsetFrom: CGPoint
         let offsetTo: CGPoint
         var progress: CGFloat = 0
@@ -210,12 +212,31 @@ final class PhotoGridZoomController: NSObject {
         snapshot.frame = CGRect(origin: offsetTo, size: collectionView.bounds.size)
         collectionView.addSubview(snapshot)
 
+        // Zooming in, the new grid starts out narrower than the screen (its tiles are shrunk to
+        // the old size), so there's nothing under the snapshot's outer columns: fading those too
+        // just showed the background, darkening the sides. Only the part over the new grid fades;
+        // the rest stays solid and slides off the edges as it grows. In the snapshot's own
+        // (untransformed) coordinates that part is a fixed band: the new grid's width ÷ ratio,
+        // centred on the pivot. Zooming out the band is wider than the screen, so all of it fades.
+        let width = collectionView.bounds.width
+        let halfBand = to.width / (2 * ratio)
+        let left = width > 0 ? min(max((pivot.x - halfBand) / width, 0), 1) : 0
+        let right = width > 0 ? min(max((pivot.x + halfBand) / width, 0), 1) : 1
+        let fadeMask = CAGradientLayer()
+        fadeMask.startPoint = CGPoint(x: 0, y: 0.5)
+        fadeMask.endPoint = CGPoint(x: 1, y: 0.5)
+        // Repeated stops make hard steps rather than gradients.
+        fadeMask.locations = [0, left, left, right, right, 1].map { NSNumber(value: Double($0)) }
+        fadeMask.frame = snapshot.bounds
+        snapshot.layer.mask = fadeMask
+
         session = Session(
             layout: layout,
             targetLevel: target,
             ratio: ratio,
             pivot: pivot,
             snapshot: snapshot,
+            fadeMask: fadeMask,
             offsetFrom: offsetFrom,
             offsetTo: offsetTo
         )
@@ -237,7 +258,12 @@ final class PhotoGridZoomController: NSObject {
             tx: (session.pivot.x - center.x) * (1 - scale),
             ty: (session.pivot.y - center.y) * (1 - scale)
         )
-        session.snapshot.alpha = 1 - progress
+        let solid = UIColor.black.cgColor
+        let faded = UIColor(white: 0, alpha: 1 - progress).cgColor
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        session.fadeMask.colors = [solid, solid, faded, faded, solid, solid]
+        CATransaction.commit()
     }
 
     /// Lands on the session's target: the new grid is already at rest underneath.
