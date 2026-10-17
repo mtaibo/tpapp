@@ -19,7 +19,7 @@ struct PhotoCollectionGrid: UIViewRepresentable {
     let onSelect: (Photo) -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(client: client)
+        Coordinator(client: client, level: columnLevel)
     }
 
     func makeUIView(context: Context) -> PhotoGridCollectionView {
@@ -35,11 +35,12 @@ struct PhotoCollectionGrid: UIViewRepresentable {
         collectionView.prefetchDataSource = coordinator
         collectionView.isPrefetchingEnabled = true
 
-        let pinch = UIPinchGestureRecognizer(target: coordinator, action: #selector(Coordinator.handlePinch(_:)))
+        let pinch = UIPinchGestureRecognizer(target: coordinator.zoom, action: #selector(PhotoGridZoomController.handlePinch(_:)))
         pinch.delegate = coordinator
         collectionView.addGestureRecognizer(pinch)
 
         coordinator.collectionView = collectionView
+        coordinator.zoom.collectionView = collectionView
         coordinator.columns = columns
         coordinator.photos = photos
         coordinator.scrollToBottomSignal = scrollToBottomSignal
@@ -50,13 +51,13 @@ struct PhotoCollectionGrid: UIViewRepresentable {
         let coordinator = context.coordinator
         coordinator.onSelect = onSelect
         coordinator.setColumnLevel = { columnLevel = $0 }
-        coordinator.columnLevel = columnLevel
         coordinator.updateRefreshControl(context.environment.refresh)
         coordinator.update(photos: photos)
 
-        let columns = PhotoGridDensity.columns(forLevel: columnLevel)
-        if columns != coordinator.columns {
-            coordinator.apply(columns: columns, anchorItem: nil)
+        // Zoom In/Out from the menu (a pinch has already settled on its level by the time it
+        // writes `columnLevel`, so this is a no-op for those).
+        if columnLevel != coordinator.zoom.level {
+            coordinator.zoom.zoom(toLevel: columnLevel)
         }
         if scrollToBottomSignal != coordinator.scrollToBottomSignal {
             coordinator.scrollToBottomSignal = scrollToBottomSignal
@@ -68,8 +69,7 @@ struct PhotoCollectionGrid: UIViewRepresentable {
     final class Coordinator: NSObject, UICollectionViewDataSource, UICollectionViewDelegate, UICollectionViewDataSourcePrefetching, UIGestureRecognizerDelegate {
         /// Newest first; item `i` is `photos[photos.count - 1 - i]`.
         var photos: [Photo] = []
-        var columns = PhotoGridDensity.columns(forLevel: 0)
-        var columnLevel = 0
+        var columns: Int
         var scrollToBottomSignal = 0
         var onSelect: (Photo) -> Void = { _ in }
         var setColumnLevel: (Int) -> Void = { _ in }
@@ -77,12 +77,23 @@ struct PhotoCollectionGrid: UIViewRepresentable {
 
         private let loader: PhotoThumbnailLoader
         private var prefetches: [IndexPath: PhotoThumbnailLoader.Ticket] = [:]
-        private var pinchConsumed = false
+        let zoom: PhotoGridZoomController
+        /// A sync that landed mid-zoom; reloading would pull the items out from under it.
+        private var pendingPhotos: [Photo]?
         private var refreshAction: RefreshAction?
         private var refreshControl: UIRefreshControl?
 
-        init(client: PhotosClient) {
+        init(client: PhotosClient, level: Int) {
             loader = PhotoThumbnailLoader(client: client)
+            columns = PhotoGridDensity.columns(forLevel: level)
+            zoom = PhotoGridZoomController(level: level)
+            super.init()
+            zoom.onLevelCommitted = { [weak self] level in self?.levelCommitted(level) }
+            zoom.onZoomEnded = { [weak self] in
+                guard let self, let pending = self.pendingPhotos else { return }
+                self.pendingPhotos = nil
+                self.update(photos: pending)
+            }
         }
 
         private func photo(at item: Int) -> Photo {
@@ -96,7 +107,7 @@ struct PhotoCollectionGrid: UIViewRepresentable {
         private var pixels: Int {
             guard let collectionView, collectionView.bounds.width > 0 else { return PhotoThumbnailCache.pixelSize }
             let insets = collectionView.adjustedContentInset
-            let side = PhotoGridLayout.itemSide(width: collectionView.bounds.width - insets.left - insets.right, columns: columns)
+            let side = PhotoGridGeometry.itemSide(width: collectionView.bounds.width - insets.left - insets.right, columns: columns)
             return PhotoThumbnailCache.pixelSize(forTile: side, scale: collectionView.traitCollection.displayScale)
         }
 
@@ -107,6 +118,10 @@ struct PhotoCollectionGrid: UIViewRepresentable {
         /// means older photos landing above don't move anything.
         func update(photos newPhotos: [Photo]) {
             guard !Self.sameArray(newPhotos, photos), newPhotos != photos, let collectionView else { return }
+            guard !zoom.isZooming else {
+                pendingPhotos = newPhotos
+                return
+            }
             let distanceFromBottom = collectionView.contentSize.height - collectionView.contentOffset.y
             photos = newPhotos
             releasePrefetches()
@@ -186,55 +201,17 @@ struct PhotoCollectionGrid: UIViewRepresentable {
             true
         }
 
-        @objc func handlePinch(_ pinch: UIPinchGestureRecognizer) {
-            switch pinch.state {
-            case .changed:
-                guard !pinchConsumed else { return }
-                let delta = pinch.scale > 1.25 ? -1 : pinch.scale < 0.8 ? 1 : 0
-                guard delta != 0 else { return }
-                pinchConsumed = true
-                let newLevel = min(max(columnLevel + delta, 0), PhotoGridDensity.columnLevels.count - 1)
-                guard newLevel != columnLevel, let collectionView else { return }
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                // Zoom around the photo under the fingers, like Photos.
-                let anchor = collectionView.indexPathForItem(at: pinch.location(in: collectionView))?.item
-                columnLevel = newLevel
-                apply(columns: PhotoGridDensity.columns(forLevel: newLevel), anchorItem: anchor)
-                setColumnLevel(newLevel)
-            case .ended, .cancelled, .failed:
-                pinchConsumed = false
-            default:
-                break
-            }
-        }
-
-        func apply(columns newColumns: Int, anchorItem: Int?) {
-            guard let collectionView, newColumns != columns else { return }
-            columns = newColumns
-            // The zoom's anchor decides where the grid lands now, not the bottom pin.
-            collectionView.isPinnedToBottom = false
-            let newLayout = PhotoGridLayout(columns: newColumns)
-            newLayout.anchorItem = anchorItem ?? centerItem()
+        private func levelCommitted(_ level: Int) {
+            guard let collectionView else { return }
+            columns = PhotoGridDensity.columns(forLevel: level)
             releasePrefetches()
-            collectionView.setCollectionViewLayout(newLayout, animated: !UIAccessibility.isReduceMotionEnabled) { _ in
-                newLayout.anchorItem = nil
-            }
             // Cells already on screen switch to the new corner radius and thumbnail size.
             let pixels = self.pixels
             for case let cell as PhotoGridCell in collectionView.visibleCells {
                 guard let indexPath = collectionView.indexPath(for: cell) else { continue }
                 cell.configure(with: photo(at: indexPath.item), pixels: pixels, cornerRadius: cornerRadius, loader: loader)
             }
-        }
-
-        private func centerItem() -> Int? {
-            guard let collectionView else { return nil }
-            let insets = collectionView.adjustedContentInset
-            let visibleHeight = collectionView.bounds.height - insets.top - insets.bottom
-            let center = CGPoint(x: collectionView.bounds.midX, y: collectionView.contentOffset.y + insets.top + visibleHeight / 2)
-            if let item = collectionView.indexPathForItem(at: center)?.item { return item }
-            let visible = collectionView.indexPathsForVisibleItems.map(\.item).sorted()
-            return visible.isEmpty ? nil : visible[visible.count / 2]
+            setColumnLevel(level)
         }
 
         // MARK: Scrolling
