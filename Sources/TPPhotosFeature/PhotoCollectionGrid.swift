@@ -22,13 +22,15 @@ struct PhotoCollectionGrid: UIViewRepresentable {
         Coordinator(client: client, level: columnLevel)
     }
 
-    func makeUIView(context: Context) -> PhotoGridCollectionView {
+    func makeUIView(context: Context) -> PhotoGridContainerView {
         let coordinator = context.coordinator
         let columns = PhotoGridDensity.columns(forLevel: columnLevel)
         let collectionView = PhotoGridCollectionView(frame: .zero, collectionViewLayout: PhotoGridLayout(columns: columns))
         collectionView.backgroundColor = .clear
         collectionView.alwaysBounceVertical = true
         collectionView.contentInsetAdjustmentBehavior = .always
+        // Breathing room between the newest photos and the tab bar, like Photos.
+        collectionView.contentInset.bottom = 20
         collectionView.register(PhotoGridCell.self, forCellWithReuseIdentifier: PhotoGridCell.reuseIdentifier)
         collectionView.dataSource = coordinator
         collectionView.delegate = coordinator
@@ -44,10 +46,13 @@ struct PhotoCollectionGrid: UIViewRepresentable {
         coordinator.columns = columns
         coordinator.photos = photos
         coordinator.scrollToBottomSignal = scrollToBottomSignal
-        return collectionView
+
+        let container = PhotoGridContainerView(collectionView: collectionView)
+        container.onLeaveWindow = { [weak coordinator] in coordinator?.restoreTabBarBehavior() }
+        return container
     }
 
-    func updateUIView(_ collectionView: PhotoGridCollectionView, context: Context) {
+    func updateUIView(_ container: PhotoGridContainerView, context: Context) {
         let coordinator = context.coordinator
         coordinator.onSelect = onSelect
         coordinator.setColumnLevel = { columnLevel = $0 }
@@ -188,6 +193,53 @@ struct PhotoCollectionGrid: UIViewRepresentable {
 
         func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
             collectionView?.isPinnedToBottom = false
+            lastOffsetY = scrollView.contentOffset.y
+        }
+
+        // MARK: Tab bar
+
+        private weak var tabBarController: UITabBarController?
+        private var originalTabBarBehavior: UITabBarController.MinimizeBehavior?
+        private var lastOffsetY: CGFloat = 0
+
+        /// The system only minimizes the tab bar for one scroll direction (and expands it on the
+        /// other); the Photos grid should tuck it away whichever way it's scrolled, so the
+        /// behavior is flipped to match the direction the user is scrolling in. Tapping the
+        /// minimized bar still brings it back.
+        func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            let y = scrollView.contentOffset.y
+            defer { lastOffsetY = y }
+            guard scrollView.isTracking || scrollView.isDecelerating, !zoom.isZooming else { return }
+            // Ignore the rubber-band bounce at either end, which runs against the scroll.
+            let insets = scrollView.adjustedContentInset
+            let maxY = max(scrollView.contentSize.height + insets.bottom - scrollView.bounds.height, -insets.top)
+            guard y > -insets.top, y < maxY else { return }
+            let delta = y - lastOffsetY
+            guard abs(delta) > 0.5, let tabBarController = findTabBarController() else { return }
+            let behavior: UITabBarController.MinimizeBehavior = delta > 0 ? .onScrollDown : .onScrollUp
+            if tabBarController.tabBarMinimizeBehavior != behavior {
+                tabBarController.tabBarMinimizeBehavior = behavior
+            }
+        }
+
+        private func findTabBarController() -> UITabBarController? {
+            if let tabBarController { return tabBarController }
+            var responder: UIResponder? = collectionView
+            while let current = responder {
+                if let controller = (current as? UIViewController)?.tabBarController {
+                    tabBarController = controller
+                    originalTabBarBehavior = controller.tabBarMinimizeBehavior
+                    return controller
+                }
+                responder = current.next
+            }
+            return nil
+        }
+
+        /// Other tabs keep the app-wide behavior.
+        func restoreTabBarBehavior() {
+            guard let tabBarController, let originalTabBarBehavior else { return }
+            tabBarController.tabBarMinimizeBehavior = originalTabBarBehavior
         }
 
         // MARK: Zoom
