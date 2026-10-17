@@ -1,4 +1,5 @@
 import Foundation
+import ImageIO
 @preconcurrency import Photos
 import SwiftUI
 import TPCore
@@ -47,10 +48,12 @@ public enum PhotoThumbnailCache {
         try? fileManager.removeItem(at: caches.appendingPathComponent("PhotoGridThumbnails", isDirectory: true))
     }
 
-    /// Decoded images for tiles on and near the screen.
+    /// Decoded bitmaps for tiles on and near the screen, keyed by checksum and pixel size and
+    /// limited by bytes: a 256px bitmap is 256 KB, so the old 2,000-image count limit let this grow
+    /// past half a gigabyte, and the memory pressure alone made scrolling stutter.
     nonisolated(unsafe) private static let memory: NSCache<NSString, ImageBox> = {
         let cache = NSCache<NSString, ImageBox>()
-        cache.countLimit = 2000
+        cache.totalCostLimit = 128 * 1024 * 1024
         return cache
     }()
 
@@ -62,23 +65,61 @@ public enum PhotoThumbnailCache {
         FileManager.default.fileExists(atPath: fileURL(forChecksum: checksum).path)
     }
 
+    /// The decoded size for a tile `points` wide: dense grids get a 128px bitmap, a quarter of the
+    /// memory and decode time of the stored 256px file, since their tiles are tiny anyway.
+    static func pixelSize(forTile points: CGFloat, scale: CGFloat) -> Int {
+        points * scale <= 140 ? 128 : pixelSize
+    }
+
+    private static func memoryKey(_ checksum: String, _ pixels: Int) -> NSString {
+        "\(checksum)-\(pixels)" as NSString
+    }
+
     /// Memory only and synchronous, so a tile scrolled back into view draws on its first frame.
+    static func cachedCGImage(forChecksum checksum: String, pixels: Int) -> CGImage? {
+        memory.object(forKey: memoryKey(checksum, pixels))?.image
+    }
+
+    /// Any size already decoded, to show something sharp-enough while the right size decodes.
+    static func anyCachedCGImage(forChecksum checksum: String) -> CGImage? {
+        cachedCGImage(forChecksum: checksum, pixels: pixelSize) ?? cachedCGImage(forChecksum: checksum, pixels: 128)
+    }
+
     static func cachedImage(for photo: Photo) -> Image? {
-        memory.object(forKey: photo.checksum as NSString)?.image
+        anyCachedCGImage(forChecksum: photo.checksum).map { Image(decorative: $0, scale: 1) }
     }
 
     /// From disk, or — only if this photo has never been seen on this device — downloaded once
     /// and kept. Runs in the caller's task, so a tile that scrolls away cancels its download.
     @concurrent
-    static func image(for photo: Photo, client: PhotosClient) async -> Image? {
-        if let cached = cachedImage(for: photo) { return cached }
-        var data = try? Data(contentsOf: fileURL(forChecksum: photo.checksum))
-        if data == nil {
-            data = await download(photo, client: client)
+    static func cgImage(for photo: Photo, pixels: Int, client: PhotosClient) async -> CGImage? {
+        if let cached = cachedCGImage(forChecksum: photo.checksum, pixels: pixels) { return cached }
+        let url = fileURL(forChecksum: photo.checksum)
+        var image = decode(CGImageSourceCreateWithURL(url as CFURL, nil), pixels: pixels)
+        if image == nil, !Task.isCancelled, let data = await download(photo, client: client) {
+            image = decode(CGImageSourceCreateWithData(data as CFData, nil), pixels: pixels)
         }
-        guard let data, !Task.isCancelled, let image = await decode(data) else { return nil }
-        memory.setObject(ImageBox(image), forKey: photo.checksum as NSString)
+        guard let image else { return nil }
+        memory.setObject(ImageBox(image), forKey: memoryKey(photo.checksum, pixels), cost: image.bytesPerRow * image.height)
         return image
+    }
+
+    @concurrent
+    static func image(for photo: Photo, client: PhotosClient) async -> Image? {
+        await cgImage(for: photo, pixels: pixelSize, client: client).map { Image(decorative: $0, scale: 1) }
+    }
+
+    /// Decodes right here, off the main thread, into a bitmap ready to draw — never lazily on
+    /// the first frame it's shown, which is what makes a grid hitch.
+    private static func decode(_ source: CGImageSource?, pixels: Int) -> CGImage? {
+        guard let source else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: pixels,
+        ]
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
     }
 
     /// Downloads the thumbnail of every photo that doesn't have one on this device yet, newest
@@ -150,29 +191,17 @@ public enum PhotoThumbnailCache {
     private static func jpegData(from image: UIImage) -> Data? {
         image.jpegData(compressionQuality: 0.75)
     }
-
-    @concurrent
-    private static func decode(_ data: Data) async -> Image? {
-        guard let image = UIImage(data: data) else { return nil }
-        // Decode now, off the main thread, rather than on first draw.
-        return Image(uiImage: await image.byPreparingForDisplay() ?? image)
-    }
     #elseif os(macOS)
     private static func jpegData(from image: NSImage) -> Data? {
         guard let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) else { return nil }
         return rep.representation(using: .jpeg, properties: [.compressionFactor: 0.75])
     }
-
-    @concurrent
-    private static func decode(_ data: Data) async -> Image? {
-        NSImage(data: data).map(Image.init(nsImage:))
-    }
     #endif
 }
 
 private final class ImageBox: @unchecked Sendable {
-    let image: Image
-    init(_ image: Image) { self.image = image }
+    let image: CGImage
+    init(_ image: CGImage) { self.image = image }
 }
 
 /// PhotoKit result handlers can fire more than once; a continuation must resume exactly once.

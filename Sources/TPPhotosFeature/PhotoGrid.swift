@@ -30,6 +30,7 @@ private struct PhotoRow: Identifiable, Equatable {
 
 /// Newest-at-the-bottom grid with pinch-to-zoom. Its own view (rather than part of
 /// `PhotoGalleryView`) so status/menu state changes up there don't recompute thousands of rows.
+/// On iOS it's a `UICollectionView` (`PhotoCollectionGrid`); the SwiftUI grid below is the Mac's.
 struct PhotoGrid: View {
     /// Newest first, as the server pages them.
     let photos: [Photo]
@@ -49,8 +50,24 @@ struct PhotoGrid: View {
     private var spacing: CGFloat { columns >= 9 ? 1 : 2 }
 
     var body: some View {
+        #if os(iOS)
+        PhotoCollectionGrid(
+            photos: photos,
+            client: client,
+            columnLevel: $columnLevel,
+            scrollToBottomSignal: scrollToBottomSignal,
+            onSelect: onSelect
+        )
+        // Scrolls under the bars; the collection view insets itself by the safe area.
+        .ignoresSafeArea()
+        #else
+        swiftUIGrid
+        #endif
+    }
+
+    private var swiftUIGrid: some View {
         let rows = Self.rows(from: photos, columns: columns)
-        ScrollView {
+        return ScrollView {
             LazyVStack(spacing: spacing) {
                 ForEach(rows) { row in
                     rowView(row)
@@ -163,7 +180,7 @@ struct PhotoGrid: View {
         return rows.reversed()
     }
 
-    private static func accessibilityLabel(for photo: Photo) -> String {
+    static func accessibilityLabel(for photo: Photo) -> String {
         var parts = [photo.isScreenshot ? "Screenshot" : "Photo"]
         if let takenAt = photo.takenAt.flatMap(PhotoDates.parse) {
             parts.append(takenAt.formatted(date: .long, time: .shortened))
