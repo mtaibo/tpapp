@@ -13,7 +13,10 @@ public enum PhotoBackupPlanner {
 
     /// v1 backs up stills only. Sorted newest-first so a long backup makes the newest photos
     /// show up almost immediately instead of only after the entire backlog finishes.
-    public static func scanImageAssets() -> AssetScan {
+    /// Enumerates the whole library, which takes a noticeable while on a large one — `@concurrent`
+    /// so it never runs on the main thread, whoever calls it.
+    @concurrent
+    public static func scanImageAssets() async -> AssetScan {
         let options = PHFetchOptions()
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
         let result = PHAsset.fetchAssets(with: options)

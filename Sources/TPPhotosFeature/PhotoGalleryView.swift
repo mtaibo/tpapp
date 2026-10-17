@@ -35,14 +35,8 @@ public struct PhotoGalleryView: View {
     /// The success message whose ✓ has already been shown for a few seconds and hidden.
     @State private var dismissedMessage: String?
 
-    // Grid density. One pinch steps one level, like the native Photos app.
-    private static let columnLevels = [1, 3, 5, 9, 15]
-    @AppStorage("photos.columnLevel") private var columnLevelIndex = 1
-    @State private var scrollPosition = ScrollPosition(idType: Int.self)
-    @State private var visiblePhotoIDs: [Int] = []
-    /// Set once the current pinch has stepped the grid, so one continuous pinch never skips
-    /// several levels at once.
-    @State private var pinchConsumed = false
+    /// Shared with `PhotoGrid`, which owns pinch-to-zoom; the menu's Zoom In/Out write it too.
+    @AppStorage(PhotoGridDensity.storageKey) private var columnLevel = 1
 
     public init(store: PhotoGalleryStore, syncStore: PhotoSyncStore, client: PhotosClient, ownerEmail: String, isAdmin: Bool = false) {
         self.store = store
@@ -214,10 +208,14 @@ public struct PhotoGalleryView: View {
             if section != .albums {
                 // The pinch gesture's equivalent for VoiceOver, keyboards and Macs without a trackpad.
                 Section {
-                    Button("Zoom In", systemImage: "plus.magnifyingglass") { stepColumns(by: -1) }
-                        .disabled(columnLevelIndex == 0)
-                    Button("Zoom Out", systemImage: "minus.magnifyingglass") { stepColumns(by: 1) }
-                        .disabled(columnLevelIndex == Self.columnLevels.count - 1)
+                    Button("Zoom In", systemImage: "plus.magnifyingglass") {
+                        withAnimation(.snappy) { columnLevel = max(columnLevel - 1, 0) }
+                    }
+                    .disabled(columnLevel <= 0)
+                    Button("Zoom Out", systemImage: "minus.magnifyingglass") {
+                        withAnimation(.snappy) { columnLevel = min(columnLevel + 1, PhotoGridDensity.columnLevels.count - 1) }
+                    }
+                    .disabled(columnLevel >= PhotoGridDensity.columnLevels.count - 1)
                 }
             }
         } label: {
@@ -233,22 +231,6 @@ public struct PhotoGalleryView: View {
     /// upside down, which also reversed VoiceOver order and broke the pinch gesture.)
     private var displayedPhotos: [Photo] {
         store.photos.reversed()
-    }
-
-    private var columnCount: Int {
-        Self.columnLevels[min(max(columnLevelIndex, 0), Self.columnLevels.count - 1)]
-    }
-
-    private var spacing: CGFloat { columnCount >= 9 ? 1 : 2 }
-
-    /// Bigger thumbnails as tiles grow, so zooming in doesn't just blow up a blurry one.
-    private var thumbnailSize: Int {
-        switch columnCount {
-        case 1: return 800
-        case 3: return 400
-        case 5: return 240
-        default: return 120
-        }
     }
 
     @ViewBuilder
@@ -273,108 +255,17 @@ public struct PhotoGalleryView: View {
                 }
             }
         } else {
-            grid
+            PhotoGrid(
+                photos: store.photos,
+                client: client,
+                isLoadingMore: store.isLoadingMore,
+                onSelect: { detailPhotoID = $0.id },
+                onReachOlder: { index in Task { await store.loadMoreIfNeeded(currentIndex: index) } }
+            )
+            .refreshable { await store.reload() }
         }
     }
 
-    private var grid: some View {
-        let photos = displayedPhotos
-        let count = photos.count
-        return ScrollView {
-            LazyVGrid(
-                columns: Array(repeating: GridItem(.flexible(), spacing: spacing), count: columnCount),
-                spacing: spacing
-            ) {
-                ForEach(Array(photos.enumerated()), id: \.element.id) { offset, photo in
-                    tile(for: photo)
-                        .onAppear {
-                            // `store` indexes newest-first; the grid shows oldest-first.
-                            Task { await store.loadMoreIfNeeded(currentIndex: count - 1 - offset) }
-                        }
-                }
-            }
-            .scrollTargetLayout()
-
-            if store.isLoadingMore {
-                ProgressView().padding()
-            }
-        }
-        .scrollPosition($scrollPosition)
-        // Open on the newest photos, and keep the view still while older pages are added above.
-        .defaultScrollAnchor(.bottom)
-        .defaultScrollAnchor(.bottom, for: .sizeChanges)
-        .onScrollTargetVisibilityChange(idType: Int.self, threshold: 0.5) { ids in
-            visiblePhotoIDs = ids
-        }
-        // Simultaneous, not `.gesture`: a plain gesture on a ScrollView loses every two-finger
-        // touch to the scroll view's own pan, which is why pinching never changed the columns.
-        .simultaneousGesture(pinchGesture)
-        .refreshable { await store.reload() }
-    }
-
-    private func tile(for photo: Photo) -> some View {
-        Button {
-            detailPhotoID = photo.id
-        } label: {
-            Color.clear
-                .aspectRatio(1, contentMode: .fit)
-                .overlay {
-                    RemoteImage(
-                        url: client.thumbnailURL(for: photo, size: thumbnailSize),
-                        // The on-device cache holds small thumbnails only; bigger tiles fetch.
-                        localFile: thumbnailSize <= 400 ? PhotoThumbnailCache.fileURL(forChecksum: photo.checksum) : nil
-                    )
-                }
-                .clipShape(.rect(cornerRadius: columnCount >= 9 ? 0 : 4))
-                .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .id(photo.id)
-        .accessibilityLabel(accessibilityLabel(for: photo))
-    }
-
-    private func accessibilityLabel(for photo: Photo) -> String {
-        var parts = [photo.isScreenshot ? "Screenshot" : "Photo"]
-        if let takenAt = photo.takenAt.flatMap(PhotoDates.parse) {
-            parts.append(takenAt.formatted(date: .long, time: .shortened))
-        }
-        return parts.joined(separator: ", ")
-    }
-
-    private var pinchGesture: some Gesture {
-        MagnifyGesture(minimumScaleDelta: 0.05)
-            .onChanged { value in
-                guard !pinchConsumed else { return }
-                if value.magnification > 1.25 {
-                    pinchConsumed = true
-                    stepColumns(by: -1)
-                } else if value.magnification < 0.8 {
-                    pinchConsumed = true
-                    stepColumns(by: 1)
-                }
-            }
-            .onEnded { _ in
-                pinchConsumed = false
-            }
-    }
-
-    /// Negative zooms in (fewer, bigger columns). Keeps the photo that was in the middle of the
-    /// screen in the middle afterwards, instead of jumping to wherever the new layout puts the
-    /// same scroll offset.
-    private func stepColumns(by delta: Int) {
-        let newIndex = min(max(columnLevelIndex + delta, 0), Self.columnLevels.count - 1)
-        guard newIndex != columnLevelIndex else { return }
-        let anchorID = visiblePhotoIDs.isEmpty ? nil : visiblePhotoIDs[visiblePhotoIDs.count / 2]
-        #if os(iOS)
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        #endif
-        withAnimation(.snappy(duration: 0.3)) {
-            columnLevelIndex = newIndex
-            if let anchorID {
-                scrollPosition.scrollTo(id: anchorID, anchor: .center)
-            }
-        }
-    }
 }
 
 /// The ring in the status button: fills with the backup's progress, or spins while the library is
@@ -474,9 +365,16 @@ private struct BackupStatusDetail: View {
 
 /// The server sends ISO-8601, sometimes with fractional seconds.
 enum PhotoDates {
+    // Built once: creating formatters per call was showing up on every tile's render.
+    // ISO8601DateFormatter is thread-safe.
+    nonisolated(unsafe) private static let fractional: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+    nonisolated(unsafe) private static let plain = ISO8601DateFormatter()
+
     static func parse(_ string: String) -> Date? {
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return fractional.date(from: string) ?? ISO8601DateFormatter().date(from: string)
+        fractional.date(from: string) ?? plain.date(from: string)
     }
 }

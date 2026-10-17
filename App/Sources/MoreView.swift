@@ -13,7 +13,7 @@ struct MoreView: View {
     @ObservedObject var session: AuthSession
     let profile: UserProfile
     let accountClient: CloudAccountClient
-    @ObservedObject var adminStore: AdminStore
+    let adminStore: AdminStore
     let resetSignal: Int
 
     @State private var path: [MoreDestination] = []

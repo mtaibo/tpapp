@@ -103,6 +103,7 @@ public final class PhotoBackgroundUploader: NSObject, @unchecked Sendable {
     /// chunk would just be wasteful, not incorrect, since the server writes each chunk at a fixed
     /// offset — but there's no reason to pay that cost).
     @discardableResult
+    @concurrent
     public func refill() async -> Bool {
         guard beginRefill() else { return false }
         defer { endRefill() }
@@ -127,7 +128,7 @@ public final class PhotoBackgroundUploader: NSObject, @unchecked Sendable {
         let room = Self.refillBatchSize - active.count
         guard room > 0 else { return madeProgress }
 
-        let scan = PhotoBackupPlanner.scanImageAssets()
+        let scan = await PhotoBackupPlanner.scanImageAssets()
         guard !scan.images.isEmpty else { return madeProgress }
 
         let knownIds: Set<String>

@@ -14,11 +14,14 @@ struct RootView: View {
     @ObservedObject var session: AuthSession
     let accountClient: CloudAccountClient
     let storeClient: StoreClient
-    @ObservedObject var homeStore: HomeStore
+    // Plain references, not @ObservedObject: each feature view observes its own store. Observing
+    // them here re-rendered the whole app — every tab — on each photo page that loaded during the
+    // background drain and on every Home WebSocket event, which made launch and Photos crawl.
+    let homeStore: HomeStore
     let photosClient: PhotosClient
-    @ObservedObject var photoGalleryStore: PhotoGalleryStore
-    @ObservedObject var photoSyncStore: PhotoSyncStore
-    @ObservedObject var adminStore: AdminStore
+    let photoGalleryStore: PhotoGalleryStore
+    let photoSyncStore: PhotoSyncStore
+    let adminStore: AdminStore
 
     @State private var selectedTab: AppTab = .store
     @State private var storeResetSignal = 0

@@ -124,7 +124,7 @@ public final class PhotoSyncStore: ObservableObject {
             return
         }
 
-        let scan = PhotoBackupPlanner.scanImageAssets()
+        let scan = await PhotoBackupPlanner.scanImageAssets()
         excludedVideoCount = scan.excludedVideoCount
         guard !scan.images.isEmpty else { return }
 
@@ -284,7 +284,7 @@ public final class PhotoSyncStore: ObservableObject {
             return
         }
 
-        let scan = PhotoBackupPlanner.scanImageAssets()
+        let scan = await PhotoBackupPlanner.scanImageAssets()
         guard !scan.images.isEmpty else {
             lastCheckMessage = "There are no photos in the library"
             return

@@ -8,52 +8,52 @@ import UIKit
 
 /// Loads and decodes thumbnails off the main thread, with an in-memory cache in front of
 /// `URLCache.shared` (which `TPAppApp` sizes for gallery use) and an optional on-disk file that
-/// wins over the network. Replaces both `AsyncImage` (no memory cache, so scrolling back up
-/// re-decoded every tile) and reading the disk cache synchronously inside `body`.
-public actor ImagePipeline {
+/// wins over the network.
+///
+/// Deliberately not an actor and with no shared in-flight tasks: every load runs inside the
+/// *caller's* task, so when a tile scrolls off screen and SwiftUI cancels its `.task`, the
+/// network request is cancelled with it. Shared unstructured tasks kept running after their tile
+/// was gone, and a fast scroll through a big grid queued hundreds of them ahead of the thumbnails
+/// actually on screen — which then looked like they were loading forever.
+public final class ImagePipeline: Sendable {
     public static let shared = ImagePipeline()
 
-    // NSCache is internally thread-safe, which is what lets `cachedImage(for:)` read it synchronously.
+    // NSCache is internally thread-safe.
     nonisolated(unsafe) private let memory = NSCache<NSURL, ImageBox>()
-    private var inFlight: [URL: Task<Image?, Never>] = [:]
 
     private init() {
-        memory.countLimit = 600
+        memory.countLimit = 800
     }
 
     /// Synchronous memory-only lookup, so a tile scrolled back into view can draw its image on the
     /// very first frame instead of flashing the placeholder.
-    public nonisolated func cachedImage(for url: URL) -> Image? {
+    public func cachedImage(for url: URL) -> Image? {
         memory.object(forKey: url as NSURL)?.image
     }
 
+    @concurrent
     public func image(for url: URL, localFile: URL? = nil) async -> Image? {
-        if let cached = memory.object(forKey: url as NSURL) { return cached.image }
-        if let task = inFlight[url] { return await task.value }
+        if let cached = cachedImage(for: url) { return cached }
 
-        let task = Task<Image?, Never> {
-            let data: Data?
-            if let localFile, let local = try? Data(contentsOf: localFile) {
-                data = local
-            } else {
-                data = try? await Self.fetch(url)
-            }
-            guard let data else { return nil }
-            return await Self.decode(data)
+        let data: Data?
+        if let localFile, let local = try? Data(contentsOf: localFile) {
+            data = local
+        } else {
+            data = await Self.fetch(url)
         }
-        inFlight[url] = task
-        let image = await task.value
-        inFlight[url] = nil
-        if let image { memory.setObject(ImageBox(image), forKey: url as NSURL) }
+        guard let data, !Task.isCancelled, let image = await Self.decode(data) else { return nil }
+        memory.setObject(ImageBox(image), forKey: url as NSURL)
         return image
     }
 
-    private static func fetch(_ url: URL) async throws -> Data? {
-        let (data, response) = try await URLSession.shared.data(from: url)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return nil }
+    @concurrent
+    private static func fetch(_ url: URL) async -> Data? {
+        guard let (data, response) = try? await URLSession.shared.data(from: url),
+              let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return nil }
         return data
     }
 
+    @concurrent
     private static func decode(_ data: Data) async -> Image? {
         #if os(macOS)
         guard let image = NSImage(data: data) else { return nil }
@@ -72,8 +72,8 @@ private final class ImageBox: @unchecked Sendable {
     init(_ image: Image) { self.image = image }
 }
 
-/// A square-cropping thumbnail backed by `ImagePipeline`. The placeholder is a flat fill, so a
-/// grid keeps its shape while images stream in.
+/// A thumbnail backed by `ImagePipeline`. The placeholder is a flat fill, so a grid keeps its
+/// shape while images stream in.
 public struct RemoteImage: View {
     let url: URL
     let localFile: URL?
