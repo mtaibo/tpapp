@@ -7,26 +7,11 @@ struct DeployJobView: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 10) {
-                if let job = store.activeJob {
-                    switch job.status {
-                    case .running: ProgressView().controlSize(.small)
-                    case .succeeded: Image(systemName: "checkmark.circle.fill").foregroundStyle(AdminTheme.success)
-                    case .failed: Image(systemName: "xmark.circle.fill").foregroundStyle(AdminTheme.danger)
-                    }
-                    Text(job.title)
-                        .font(.system(size: 15, weight: .semibold))
-                }
-                Spacer()
-                Button(store.activeJob?.status == .running ? "Ocultar" : "Cerrar") { dismiss() }
-            }
-            .padding(16)
-
+        NavigationStack {
             ScrollViewReader { proxy in
                 ScrollView {
                     Text(store.activeJob?.output ?? "")
-                        .font(.system(size: 11, design: .monospaced))
+                        .font(.caption2.monospaced())
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(12)
@@ -34,6 +19,23 @@ struct DeployJobView: View {
                 }
                 .onChange(of: store.activeJob?.output) {
                     proxy.scrollTo("bottom", anchor: .bottom)
+                }
+            }
+            .navigationTitle(store.activeJob?.title ?? "Deploy")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(store.activeJob?.status == .running ? "Hide" : "Done") { dismiss() }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    switch store.activeJob?.status {
+                    case .running: ProgressView()
+                    case .succeeded: Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).accessibilityLabel("Succeeded")
+                    case .failed: Image(systemName: "xmark.circle.fill").foregroundStyle(.red).accessibilityLabel("Failed")
+                    case nil: EmptyView()
+                    }
                 }
             }
         }

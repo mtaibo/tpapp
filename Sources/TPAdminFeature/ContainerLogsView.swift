@@ -11,44 +11,45 @@ struct ContainerLogsView: View {
     @State private var isFollowing = true
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Button("Cerrar") { dismiss() }
-                Spacer()
-                Text(container.name)
-                    .font(.system(size: 15, weight: .semibold))
-                Spacer()
-                Toggle(isOn: $isFollowing) {
-                    Image(systemName: "dot.radiowaves.left.and.right")
+        NavigationStack {
+            VStack(spacing: 0) {
+                if let errorMessage {
+                    Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                        .padding()
                 }
-                .toggleStyle(.button)
-                .help("Actualizar cada pocos segundos")
-                .accessibilityLabel("Actualizar automáticamente")
-            }
-            .padding(16)
-
-            if let errorMessage {
-                Text(errorMessage)
-                    .font(.system(size: 13))
-                    .foregroundStyle(AdminTheme.danger)
-                    .padding(.horizontal, 16)
-            }
-
-            ScrollViewReader { proxy in
-                ScrollView([.vertical, .horizontal]) {
-                    LazyVStack(alignment: .leading, spacing: 2) {
-                        ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
-                            Text(displayLine(line))
-                                .font(.system(size: 11, design: .monospaced))
-                                .textSelection(.enabled)
-                                .fixedSize()
-                                .id(index)
+                ScrollViewReader { proxy in
+                    ScrollView([.vertical, .horizontal]) {
+                        LazyVStack(alignment: .leading, spacing: 2) {
+                            ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
+                                Text(displayLine(line))
+                                    .font(.caption2.monospaced())
+                                    .textSelection(.enabled)
+                                    .fixedSize()
+                                    .id(index)
+                            }
                         }
+                        .padding(12)
                     }
-                    .padding(12)
+                    .onChange(of: lines.count) { _, count in
+                        if count > 0 { proxy.scrollTo(count - 1, anchor: .bottom) }
+                    }
                 }
-                .onChange(of: lines.count) { _, count in
-                    if count > 0 { proxy.scrollTo(count - 1, anchor: .bottom) }
+            }
+            .navigationTitle(container.name)
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done") { dismiss() }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Toggle(isOn: $isFollowing) {
+                        Label("Live", systemImage: "dot.radiowaves.left.and.right")
+                    }
+                    .help("Refresh every few seconds")
                 }
             }
         }

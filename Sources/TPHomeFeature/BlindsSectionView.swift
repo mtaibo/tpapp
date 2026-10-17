@@ -1,5 +1,6 @@
 import SwiftUI
 import TPCore
+import TPUI
 
 struct BlindsSectionView: View {
     @ObservedObject var store: HomeStore
@@ -45,10 +46,7 @@ private struct BlindCardView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 6) {
-                Circle()
-                    .fill((blind.connection?.online ?? false) ? Color.green : Color.gray)
-                    .frame(width: 8, height: 8)
-                    .accessibilityLabel((blind.connection?.online ?? false) ? "Online" : "Offline")
+                StatusDot(isOnline ? .green : .gray, label: isOnline ? "Online" : "Offline")
                 Text(blind.name)
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
@@ -65,15 +63,18 @@ private struct BlindCardView: View {
                 )
                 .frame(height: 180)
 
-                VStack(spacing: 8) {
-                    Button(action: onUp) { Image(systemName: "chevron.up").frame(width: 36, height: 36) }
+                // Same round Liquid Glass controls as the blueprint's blind card.
+                VStack(spacing: 10) {
+                    Button(action: onUp) { Image(systemName: "chevron.up").frame(width: 30, height: 30) }
                         .accessibilityLabel("Raise")
-                    Button(action: onStop) { Image(systemName: "pause.fill").frame(width: 36, height: 36) }
+                    Button(action: onStop) { Image(systemName: "pause.fill").frame(width: 30, height: 30) }
                         .accessibilityLabel("Stop")
-                    Button(action: onDown) { Image(systemName: "chevron.down").frame(width: 36, height: 36) }
+                    Button(action: onDown) { Image(systemName: "chevron.down").frame(width: 30, height: 30) }
                         .accessibilityLabel("Lower")
                 }
-                .buttonStyle(.bordered)
+                .font(.body.weight(.medium))
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
             }
 
             HStack(spacing: 8) {
@@ -84,16 +85,19 @@ private struct BlindCardView: View {
                     #if os(iOS)
                     .keyboardType(.numberPad)
                     #endif
-                Button(action: commit) {
-                    Image(systemName: "chevron.right")
-                        .frame(width: 36, height: 36)
-                }
-                .accessibilityLabel("Set position")
+                Button("Set", action: commit)
+                    .buttonStyle(.glass)
+                    .disabled(Int(inputText) == nil)
+                    .accessibilityLabel("Set position")
             }
         }
         .padding(16)
-        .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 22))
+        .background(.fill.tertiary, in: .rect(cornerRadius: 22))
+        .opacity(isOnline ? 1 : 0.5)
+        .disabled(!isOnline)
     }
+
+    private var isOnline: Bool { blind.connection?.online ?? false }
 
     private func commit() {
         guard let value = Int(inputText) else { return }

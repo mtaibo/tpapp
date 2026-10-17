@@ -5,3 +5,5 @@ App/Config/Local.xcconfig
 App/build/
 App/build-ios/
 .DS_Store
+App/build-sim/
+App/build-mac/

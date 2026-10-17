@@ -8,6 +8,9 @@ public final class HomeStore: ObservableObject {
     @Published public private(set) var mapConfig: MapConfig?
     @Published public private(set) var isLoading = false
     @Published public private(set) var loadError: String?
+    /// The last up/down/stop/set command that failed. These used to be `try?`'d away, so a blind
+    /// that didn't move gave no hint why.
+    @Published public var commandError: String?
 
     private let client: HomeClient
     private let wsClient: HomeWebSocketClient
@@ -42,7 +45,7 @@ public final class HomeStore: ObservableObject {
             lights = Dictionary(uniqueKeysWithValues: lightsResult.map { ($0.id, $0) })
             mapConfig = mapResult
         } catch {
-            loadError = error.localizedDescription
+            loadError = apiErrorMessage(error)
         }
         isLoading = false
     }
@@ -68,18 +71,26 @@ public final class HomeStore: ObservableObject {
     }
 
     public func sendUp(_ id: String) async {
-        try? await client.up(id)
+        await send { try await client.up(id) }
     }
 
     public func sendDown(_ id: String) async {
-        try? await client.down(id)
+        await send { try await client.down(id) }
     }
 
     public func sendStop(_ id: String) async {
-        try? await client.stop(id)
+        await send { try await client.stop(id) }
     }
 
     public func sendSet(_ id: String, position: Int) async {
-        try? await client.set(id, position: position)
+        await send { try await client.set(id, position: position) }
+    }
+
+    private func send(_ command: () async throws -> Void) async {
+        do {
+            try await command()
+        } catch {
+            commandError = apiErrorMessage(error)
+        }
     }
 }

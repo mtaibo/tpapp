@@ -2,8 +2,8 @@ name: TPApp
 options:
   bundleIdPrefix: com.migueltaibo
   deploymentTarget:
-    iOS: "26.0"
-    macOS: "26.0"
+    iOS: "27.0"
+    macOS: "27.0"
 
 packages:
   tpapp:
@@ -34,6 +34,8 @@ targets:
       - package: tpapp
         product: TPCore
       - package: tpapp
+        product: TPUI
+      - package: tpapp
         product: TPCloudFeature
       - package: tpapp
         product: TPStoreFeature
@@ -63,6 +65,8 @@ targets:
     dependencies:
       - package: tpapp
         product: TPCore
+      - package: tpapp
+        product: TPUI
       - package: tpapp
         product: TPCloudFeature
       - package: tpapp

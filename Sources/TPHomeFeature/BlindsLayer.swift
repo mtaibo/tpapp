@@ -13,7 +13,7 @@ struct BlindsLayer: View {
             blindView(blind)
                 // Hidden (not animated) the instant it's selected: `BlueprintView`'s hero card
                 // appears already matching this icon's exact screen rect, so the swap is seamless.
-                .opacity(blind.id == selectedBlindID ? 0 : 1)
+                .opacity(blind.id == selectedBlindID ? 0 : (blind.connection?.online == true ? 1 : 0.3))
                 .position(x: blind.map.x + blind.map.width / 2, y: blind.map.y + blind.map.height / 2)
         }
     }

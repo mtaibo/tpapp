@@ -34,7 +34,8 @@ struct BlueprintView: View {
             let availableWidth = max(geometry.size.width - Self.padding * 2, 0)
             let width = min(availableWidth, Self.maxWidth)
             let scale = canvasSize.width > 0 ? width / canvasSize.width : 1
-            let onlineBlinds = Array(store.blinds.values).filter { $0.connection?.online == true }
+            let allBlinds = Array(store.blinds.values)
+            let onlineBlinds = allBlinds.filter { $0.connection?.online == true }
             let originX = (geometry.size.width - canvasSize.width * scale) / 2
             let originY = (geometry.size.height - canvasSize.height * scale) / 2
             let finalFrame = CGRect(
@@ -49,7 +50,9 @@ struct BlueprintView: View {
                     if let mapConfig = store.mapConfig {
                         WallsLayer(rooms: mapConfig.rooms, labels: mapConfig.labels, doors: mapConfig.doors)
                         LightsLayer(lights: Array(store.lights.values).filter { $0.connection?.online == true })
-                        BlindsLayer(blinds: onlineBlinds, selectedBlindID: selectedBlindID)
+                        // Offline blinds stay on the plan, dimmed and not tappable, instead of
+                        // vanishing — a missing window is easy to mistake for a drawing bug.
+                        BlindsLayer(blinds: allBlinds, selectedBlindID: selectedBlindID)
                     }
                 }
                 .frame(width: canvasSize.width, height: canvasSize.height)

@@ -15,14 +15,13 @@ struct TPAppApp: App {
     @StateObject private var session = AuthSession(baseURL: authBaseURL)
     private let accountClient = CloudAccountClient(client: HTTPClient(baseURL: authBaseURL))
     private let storeClient = StoreClient(client: HTTPClient(baseURL: storeBaseURL))
-    private let photosClient = PhotosClient(client: HTTPClient(baseURL: storeBaseURL))
+    private static let photosClient = PhotosClient(client: HTTPClient(baseURL: storeBaseURL))
     @StateObject private var homeStore = HomeStore(
         client: HomeClient(client: HTTPClient(baseURL: homeBaseURL)),
         wsClient: HomeWebSocketClient(url: homeWSURL)
     )
-    @StateObject private var photoGalleryStore = PhotoGalleryStore(client: PhotosClient(client: HTTPClient(baseURL: storeBaseURL)))
-    @StateObject private var photoSyncStore = PhotoSyncStore(client: PhotosClient(client: HTTPClient(baseURL: storeBaseURL)))
-    @StateObject private var photosTabBarState = PhotosTabBarState()
+    @StateObject private var photoGalleryStore = PhotoGalleryStore(client: photosClient)
+    @StateObject private var photoSyncStore = PhotoSyncStore(client: photosClient)
     @StateObject private var adminStore = AdminStore(client: AdminClient(client: HTTPClient(baseURL: adminBaseURL)))
 
     #if os(iOS)
@@ -45,10 +44,9 @@ struct TPAppApp: App {
                 accountClient: accountClient,
                 storeClient: storeClient,
                 homeStore: homeStore,
-                photosClient: photosClient,
+                photosClient: Self.photosClient,
                 photoGalleryStore: photoGalleryStore,
                 photoSyncStore: photoSyncStore,
-                photosTabBarState: photosTabBarState,
                 adminStore: adminStore
             )
         }

@@ -1,5 +1,6 @@
 import SwiftUI
 import TPCore
+import TPUI
 
 struct ClaudeSectionView: View {
     @ObservedObject var store: AdminStore
@@ -8,46 +9,43 @@ struct ClaudeSectionView: View {
     @State private var pendingStop: ClaudeSession?
 
     var body: some View {
-        VStack(spacing: 16) {
+        Group {
             if let list = store.claude {
-                newSessionCard(directories: list.directories)
+                newSessionSection(directories: list.directories)
                 if list.sessions.isEmpty {
-                    Text("No hay sesiones de Claude en marcha")
-                        .font(.system(size: 14))
-                        .foregroundStyle(AdminTheme.muted)
-                        .padding(.top, 8)
+                    Section {
+                        Text("No Claude sessions running")
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 ForEach(list.sessions) { session in
-                    sessionCard(session)
+                    sessionSection(session)
                 }
             } else {
-                ProgressView().tint(.white).padding(.top, 40)
+                AdminLoadingRow()
             }
         }
         .confirmationDialog(
-            "¿Detener \(pendingStop?.name ?? "")?",
+            "Stop \(pendingStop?.name ?? "")?",
             isPresented: Binding(get: { pendingStop != nil }, set: { if !$0 { pendingStop = nil } }),
-            titleVisibility: .visible
-        ) {
-            Button("Detener", role: .destructive) {
-                if let session = pendingStop {
-                    Task { await store.stopClaudeSession(name: session.name) }
-                }
+            titleVisibility: .visible,
+            presenting: pendingStop
+        ) { session in
+            Button("Stop", role: .destructive) {
+                Task { await store.stopClaudeSession(name: session.name) }
             }
-        } message: {
-            if pendingStop?.isPrimary == true {
-                Text("Es la sesión desde la que montaste este panel: se cortará esa conversación y tendrás que volver a arrancarla.")
+        } message: { session in
+            if session.isPrimary {
+                Text("This is the session this panel was set up from. That conversation will end and you'll need to start it again.")
             } else {
-                Text("Se cerrará el proceso de claude remote-control. Las conversaciones en curso se cortarán.")
+                Text("The claude remote-control process will be closed. Any ongoing conversations will end.")
             }
         }
     }
 
-    private func newSessionCard(directories: [String]) -> some View {
-        adminCard(title: "Nueva sesión") {
-            Text("Arranca `claude remote-control` en segundo plano en la carpeta elegida y conéctate desde la app de Claude o claude.ai.")
-                .font(.system(size: 13))
-                .foregroundStyle(AdminTheme.subtle)
+    private func newSessionSection(directories: [String]) -> some View {
+        let isStarting = directories.contains { store.busy.contains($0) }
+        return Section {
             Menu {
                 ForEach(directories, id: \.self) { directory in
                     Button(displayName(directory)) {
@@ -60,97 +58,72 @@ struct ClaudeSectionView: View {
                     }
                 }
             } label: {
-                HStack(spacing: 8) {
-                    if directories.contains(where: { store.busy.contains($0) }) {
-                        ProgressView().controlSize(.small).tint(.white)
-                    } else {
-                        Image(systemName: "plus")
-                    }
-                    Text("Elegir carpeta")
+                HStack {
+                    Label("New Session…", systemImage: "plus")
+                    Spacer()
+                    if isStarting { ProgressView() }
                 }
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 10)
             }
-            .menuIndicator(.hidden)
-            .buttonStyle(.glass)
-            .disabled(directories.contains(where: { store.busy.contains($0) }))
+            .disabled(isStarting)
+        } header: {
+            Text("New Session")
+        } footer: {
+            Text("Starts `claude remote-control` in the background in the chosen folder. Connect from the Claude app or claude.ai.")
         }
     }
 
-    private func sessionCard(_ session: ClaudeSession) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+    private func sessionSection(_ session: ClaudeSession) -> some View {
+        Section {
             HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text(displayName(session.directory))
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(.white)
-                    Text(session.name + (session.isPrimary ? " · esta conexión" : ""))
-                        .font(.system(size: 11))
-                        .foregroundStyle(AdminTheme.subtle)
+                        .font(.headline)
+                    Text(session.name + (session.isPrimary ? " · this connection" : ""))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
                 Spacer()
                 stateBadge(session.state)
             }
 
             if session.state == .needsAttention {
-                Text("Claude pregunta si confías en esta carpeta antes de poder usarla.")
-                    .font(.system(size: 13))
-                    .foregroundStyle(AdminTheme.warning)
-            }
-
-            HStack(spacing: 10) {
-                if session.state == .needsAttention {
-                    actionButton("Confiar", systemImage: "checkmark.shield", busy: store.busy.contains(session.name)) {
-                        Task { await store.trustClaudeSessionFolder(name: session.name) }
-                    }
-                } else if let url = session.url.flatMap(URL.init(string:)) {
-                    actionButton("Abrir", systemImage: "arrow.up.right.square", busy: false) {
-                        openURL(url)
+                Button {
+                    Task { await store.trustClaudeSessionFolder(name: session.name) }
+                } label: {
+                    HStack {
+                        Label("Trust Folder", systemImage: "checkmark.shield")
+                        Spacer()
+                        if store.busy.contains(session.name) { ProgressView() }
                     }
                 }
-                actionButton("Detener", systemImage: "stop.fill", busy: store.busy.contains(session.name), role: .destructive) {
-                    pendingStop = session
+                .disabled(store.busy.contains(session.name))
+            } else if let url = session.url.flatMap(URL.init(string:)) {
+                Button("Open", systemImage: "arrow.up.right.square") { openURL(url) }
+            }
+
+            Button(role: .destructive) {
+                pendingStop = session
+            } label: {
+                HStack {
+                    Label("Stop", systemImage: "stop.fill")
+                    Spacer()
+                    if store.busy.contains(session.name), session.state != .needsAttention { ProgressView() }
                 }
             }
-        }
-        .padding(18)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(.regular.tint(.white.opacity(0.03)), in: .rect(cornerRadius: 18))
-    }
-
-    private func actionButton(
-        _ title: String,
-        systemImage: String,
-        busy: Bool,
-        role: ButtonRole? = nil,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(role: role, action: action) {
-            HStack(spacing: 6) {
-                if busy {
-                    ProgressView().controlSize(.small).tint(.white)
-                } else {
-                    Image(systemName: systemImage)
-                }
-                Text(title)
+            .disabled(store.busy.contains(session.name))
+        } footer: {
+            if session.state == .needsAttention {
+                Text("Claude is asking whether you trust this folder before it can be used.")
             }
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(role == .destructive ? AdminTheme.danger : .white)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 8)
         }
-        .buttonStyle(.glass)
-        .disabled(busy)
     }
 
-    private func stateBadge(_ state: ClaudeSession.State) -> some View {
+    private func stateBadge(_ state: ClaudeSession.State) -> StatusBadge {
         switch state {
-        case .connected: return adminBadge("Conectada", color: AdminTheme.success)
-        case .connecting, .starting: return adminBadge("Arrancando", color: AdminTheme.warning)
-        case .needsAttention: return adminBadge("Esperando", color: AdminTheme.warning)
-        case .disconnected: return adminBadge("Desconectada", color: AdminTheme.danger)
+        case .connected: return StatusBadge("Connected", tint: .green)
+        case .connecting, .starting: return StatusBadge("Starting", tint: .orange)
+        case .needsAttention: return StatusBadge("Waiting", tint: .orange)
+        case .disconnected: return StatusBadge("Disconnected", tint: .red)
         }
     }
 

@@ -16,72 +16,79 @@ struct LoginView: View {
     @FocusState private var focusedField: Field?
 
     var body: some View {
-        ZStack {
-            Color.black
-                .ignoresSafeArea()
-                // The number pad has no return key and the email keyboard can cover the button, so
-                // tapping anywhere outside the card is the way out of the keyboard.
-                .contentShape(Rectangle())
-                .onTapGesture { focusedField = nil }
-
-            GlassEffectContainer {
+        ScrollView {
+            VStack(spacing: 28) {
+                header
                 Group {
-                    if case .totpRequired(let email) = session.state {
-                        totpStep(email: email)
+                    if case .totpRequired = session.state {
+                        totpStep
                     } else {
                         passwordStep
                     }
                 }
-                .padding(32)
                 .frame(maxWidth: 380)
-                .glassEffect(.regular.tint(.white.opacity(0.03)), in: .rect(cornerRadius: 22))
             }
             .padding(24)
+            .padding(.top, 60)
+            .frame(maxWidth: .infinity)
         }
+        .scrollBounceBehavior(.basedOnSize)
+        // The number pad has no return key and the email keyboard can cover the button, so
+        // dragging the form (or tapping the button) is the way out of the keyboard.
+        .scrollDismissesKeyboard(.interactively)
         #if os(macOS)
-        .frame(minWidth: 480, minHeight: 420)
+        .frame(minWidth: 480, minHeight: 480)
         #endif
     }
 
+    private var header: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "cloud.fill")
+                .font(.system(size: 56))
+                .foregroundStyle(.tint)
+                .accessibilityHidden(true)
+            Text("TPCloud")
+                .font(.largeTitle.bold())
+            Text(isTOTPStep ? "Enter the 6-digit code from your authenticator app." : "Sign in to your files, photos and home.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+    }
+
+    private var isTOTPStep: Bool {
+        if case .totpRequired = session.state { return true }
+        return false
+    }
+
     private var passwordStep: some View {
-        VStack(alignment: .leading, spacing: 24) {
-            Text("Login")
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(.white)
+        VStack(spacing: 12) {
+            // `.username`, not `.emailAddress`: AutoFill only pairs a saved login with the
+            // password field when the account field is marked as the username.
+            TextField("Email", text: $email)
+                .textContentType(.username)
+                .focused($focusedField, equals: .email)
+                .submitLabel(.next)
+                .onSubmit { focusedField = .password }
+                #if os(iOS)
+                .keyboardType(.emailAddress)
+                .textInputAutocapitalization(.never)
+                #endif
+                .autocorrectionDisabled()
+                .loginFieldStyle()
 
-            field(label: "MAIL", accessibilityLabel: "Email") {
-                // `.username`, not `.emailAddress`: AutoFill only pairs a saved login with the
-                // password field when the account field is marked as the username.
-                TextField("", text: $email)
-                    .textContentType(.username)
-                    .focused($focusedField, equals: .email)
-                    .submitLabel(.next)
-                    .onSubmit { focusedField = .password }
-                    #if os(iOS)
-                    .keyboardType(.emailAddress)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    #endif
-            }
-
-            field(label: "PASSWORD") {
-                SecureField("••••••••", text: $password)
-                    .textContentType(.password)
-                    .focused($focusedField, equals: .password)
-                    .submitLabel(.go)
-                    .onSubmit { Task { await login() } }
-            }
+            SecureField("Password", text: $password)
+                .textContentType(.password)
+                .focused($focusedField, equals: .password)
+                .submitLabel(.go)
+                .onSubmit { Task { await login() } }
+                .loginFieldStyle()
 
             errorText
 
-            Button {
-                Task { await login() }
-            } label: {
-                buttonLabel("Log in")
-            }
-            .buttonStyle(.glassProminent)
-            .tint(.white.opacity(0.18))
-            .disabled(email.isEmpty || password.isEmpty || isLoading)
+            primaryButton("Sign In") { await login() }
+                .disabled(email.isEmpty || password.isEmpty || isLoading)
+                .padding(.top, 8)
         }
         .onAppear {
             if email.isEmpty, password.isEmpty, let saved = credentialStore.load() {
@@ -93,53 +100,42 @@ struct LoginView: View {
         }
     }
 
-    private func totpStep(email: String) -> some View {
-        VStack(alignment: .leading, spacing: 24) {
-            Text("Two-factor authentication")
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(.white)
-
-            field(label: "CODE", accessibilityLabel: "Verification code") {
-                TextField("······", text: $code)
-                    .textContentType(.oneTimeCode)
-                    .focused($focusedField, equals: .code)
-                    #if os(iOS)
-                    .keyboardType(.numberPad)
-                    #endif
-                    .onChange(of: code) { _, newValue in
-                        let digits = String(newValue.filter(\.isNumber).prefix(6))
-                        if digits != newValue {
-                            code = digits // re-enters onChange with the cleaned value
-                        } else if digits.count == 6, !isLoading {
-                            // An AutoFilled code arrives all at once, and the number pad has no
-                            // return key to submit it — so a full code submits itself.
-                            Task { await verify() }
-                        }
+    private var totpStep: some View {
+        VStack(spacing: 12) {
+            TextField("Verification Code", text: $code)
+                .textContentType(.oneTimeCode)
+                .focused($focusedField, equals: .code)
+                .font(.title2.monospacedDigit())
+                .multilineTextAlignment(.center)
+                #if os(iOS)
+                .keyboardType(.numberPad)
+                #endif
+                .loginFieldStyle()
+                .onChange(of: code) { _, newValue in
+                    let digits = String(newValue.filter(\.isNumber).prefix(6))
+                    if digits != newValue {
+                        code = digits // re-enters onChange with the cleaned value
+                    } else if digits.count == 6, !isLoading {
+                        // An AutoFilled code arrives all at once, and the number pad has no
+                        // return key to submit it — so a full code submits itself.
+                        Task { await verify() }
                     }
-                    .onSubmit { Task { await verify() } }
-            }
+                }
+                .onSubmit { Task { await verify() } }
 
             errorText
 
-            HStack(spacing: 12) {
-                Button {
-                    errorMessage = nil
-                    code = ""
-                    session.cancelTOTP()
-                } label: {
-                    buttonLabel("Back")
-                }
-                .buttonStyle(.glass)
-
-                Button {
-                    Task { await verify() }
-                } label: {
-                    buttonLabel("Continue")
-                }
-                .buttonStyle(.glassProminent)
-                .tint(.white.opacity(0.18))
+            primaryButton("Continue") { await verify() }
                 .disabled(code.count != 6 || isLoading)
+                .padding(.top, 8)
+
+            Button("Use a Different Account") {
+                errorMessage = nil
+                code = ""
+                session.cancelTOTP()
             }
+            .buttonStyle(.borderless)
+            .padding(.top, 4)
         }
         .onAppear { focusedField = .code }
     }
@@ -147,41 +143,26 @@ struct LoginView: View {
     @ViewBuilder
     private var errorText: some View {
         if let errorMessage {
-            Text(errorMessage)
-                .font(.system(size: 13))
-                .foregroundStyle(Color(red: 0.988, green: 0.647, blue: 0.647))
+            Label(errorMessage, systemImage: "exclamationmark.circle.fill")
+                .font(.footnote)
+                .foregroundStyle(.red)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
-    private func field<Content: View>(label: String, accessibilityLabel: String? = nil, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(label)
-                .font(.system(size: 11, weight: .medium))
-                .tracking(0.6)
-                .foregroundStyle(Color(white: 0.45))
-            content()
-                .textFieldStyle(.plain)
-                .foregroundStyle(.white)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .glassEffect(.regular, in: .rect(cornerRadius: 10))
-                // The caption above is a styled label, not an accessible one (VoiceOver
-                // doesn't associate sibling text with a field on its own).
-                .accessibilityLabel(accessibilityLabel ?? label)
-        }
-    }
-
-    private func buttonLabel(_ title: String) -> some View {
-        HStack(spacing: 8) {
-            if isLoading {
-                ProgressView().controlSize(.small).tint(.white)
+    private func primaryButton(_ title: String, action: @escaping () async -> Void) -> some View {
+        Button {
+            focusedField = nil
+            Task { await action() }
+        } label: {
+            HStack(spacing: 8) {
+                if isLoading { ProgressView() }
+                Text(title).fontWeight(.semibold)
             }
-            Text(title)
-                .font(.system(size: 15, weight: .semibold))
+            .frame(maxWidth: .infinity)
         }
-        .foregroundStyle(.white)
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 12)
+        .buttonStyle(.glassProminent)
+        .controlSize(.large)
     }
 
     private func login() async {
@@ -205,7 +186,17 @@ struct LoginView: View {
             try await session.verifyTOTP(code)
         } catch {
             errorMessage = apiErrorMessage(error)
+            code = ""
         }
+    }
+}
+
+private extension View {
+    func loginFieldStyle() -> some View {
+        textFieldStyle(.plain)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .background(.fill.tertiary, in: .rect(cornerRadius: 14))
     }
 }
 

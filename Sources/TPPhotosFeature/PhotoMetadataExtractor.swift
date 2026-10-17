@@ -78,7 +78,8 @@ public enum PhotoMetadataExtractor {
 
         return ExtractedPhotoMetadata(
             sourceAssetId: asset.localIdentifier,
-            originalFilename: resource.originalFilename,
+            // `filename` (iOS 27) is optional where the deprecated `originalFilename` wasn't.
+            originalFilename: resource.filename ?? "untitled",
             fileSize: data.count,
             checksum: checksum,
             mimeType: mimeType(for: resource),
@@ -101,8 +102,8 @@ public enum PhotoMetadataExtractor {
     /// `requestData`/`requestContentEditingInput` calls — safe to call for every asset, even iCloud-only ones.
     public static func extractLightweight(from asset: PHAsset) -> LightweightPhotoMetadata {
         let resources = PHAssetResource.assetResources(for: asset)
-        let originalFilename = resources.first(where: { $0.type == .photo })?.originalFilename
-            ?? resources.first(where: { $0.type == .fullSizePhoto })?.originalFilename
+        let originalFilename = resources.first(where: { $0.type == .photo })?.filename
+            ?? resources.first(where: { $0.type == .fullSizePhoto })?.filename
         return LightweightPhotoMetadata(
             sourceAssetId: asset.localIdentifier,
             originalFilename: originalFilename,

@@ -45,7 +45,7 @@ public enum PhotoBackupScheduler {
         request.requiresNetworkConnectivity = true
         request.requiresExternalPower = false
         request.earliestBeginDate = Date(timeIntervalSinceNow: 60)
-        try? BGTaskScheduler.shared.submit(request)
+        BGTaskScheduler.shared.submitTaskRequest(request) { _ in }
     }
 }
 

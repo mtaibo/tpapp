@@ -1,113 +1,81 @@
 import SwiftUI
 import TPCore
+import TPUI
 
+/// Profile, password, two-factor and active sessions, as a standard grouped form. Pushed from the
+/// More tab, so it has no background or sign-out button of its own anymore.
 public struct AccountView: View {
-    @ObservedObject var session: AuthSession
     let accountClient: CloudAccountClient
 
     @State private var profile: AccountProfile?
-    @State private var isLoading = true
     @State private var loadError: String?
+    @State private var errorMessage: String?
 
     @State private var displayNameDraft = ""
     @State private var isSavingName = false
-    @State private var nameSaveError: String?
 
     @State private var currentPassword = ""
     @State private var newPassword = ""
     @State private var confirmPassword = ""
     @State private var isSavingPassword = false
-    @State private var passwordMessage: (text: String, isError: Bool)?
+    @State private var passwordUpdated = false
 
     @State private var totpSetup: CloudAccountClient.TOTPSetup?
     @State private var totpCode = ""
     @State private var isTOTPBusy = false
-    @State private var totpMessage: (text: String, isError: Bool)?
 
-    private let errorColor = Color(red: 0.988, green: 0.647, blue: 0.647)
-    private let successColor = Color(red: 0.525, green: 0.937, blue: 0.675)
-
-    public init(session: AuthSession, accountClient: CloudAccountClient) {
-        self.session = session
+    public init(accountClient: CloudAccountClient) {
         self.accountClient = accountClient
     }
 
     public var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    header
-                    if let profile {
-                        profileSection(profile)
-                        passwordSection(profile)
-                        totpSection(profile)
-                        sessionsSection(profile)
-                    } else if let loadError {
-                        Text(loadError).foregroundStyle(errorColor)
-                    } else {
-                        ProgressView().tint(.white)
-                    }
+        Form {
+            if let profile {
+                profileSection(profile)
+                passwordSection(profile)
+                totpSection(profile)
+                sessionsSection(profile)
+            } else if let loadError {
+                ContentUnavailableView {
+                    Label("Couldn't Load Account", systemImage: "person.crop.circle.badge.exclamationmark")
+                } description: {
+                    Text(loadError)
+                } actions: {
+                    Button("Try Again") { Task { await loadProfile() } }
                 }
-                .padding(24)
-                .frame(maxWidth: 480)
+            } else {
+                ProgressView()
+                    .frame(maxWidth: .infinity)
             }
         }
-        #if os(macOS)
-        .frame(minWidth: 480, minHeight: 600)
-        #endif
+        .formStyle(.grouped)
+        .navigationTitle("Account")
         .task { await loadProfile() }
-    }
-
-    private var header: some View {
-        HStack {
-            Text(profile?.email ?? "")
-                .font(.system(size: 13))
-                .foregroundStyle(Color(white: 0.5))
-            Spacer()
-            Button {
-                Task { await session.signOut() }
-            } label: {
-                Text("Log out")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-            }
-            .buttonStyle(.glass)
-        }
+        .refreshable { await loadProfile() }
+        .errorAlert($errorMessage)
     }
 
     // MARK: - Profile
 
     private func profileSection(_ profile: AccountProfile) -> some View {
-        sectionCard(title: "Profile") {
-            VStack(alignment: .leading, spacing: 14) {
-                infoRow(label: "Email", value: profile.email)
-
-                VStack(alignment: .leading, spacing: 6) {
-                    fieldLabel("Name")
-                    HStack(spacing: 8) {
-                        glassTextField(label: "Name") {
-                            TextField("", text: $displayNameDraft)
-                                .textContentType(.name)
-                        }
-                        if canSaveName(profile) {
-                            Button {
-                                Task { await saveDisplayName() }
-                            } label: {
-                                buttonLabel("Save", isLoading: isSavingName)
-                            }
-                            .buttonStyle(.glassProminent)
-                            .tint(.white.opacity(0.18))
-                            .disabled(isSavingName)
-                        }
+        Section("Profile") {
+            LabeledContent("Email", value: profile.email)
+            HStack {
+                TextField("Name", text: $displayNameDraft)
+                    .textContentType(.name)
+                    .onSubmit { Task { await saveDisplayName() } }
+                if canSaveName(profile) {
+                    Button {
+                        Task { await saveDisplayName() }
+                    } label: {
+                        if isSavingName { ProgressView() } else { Text("Save") }
                     }
+                    .buttonStyle(.borderless)
+                    .disabled(isSavingName)
                 }
-
-                if let nameSaveError {
-                    Text(nameSaveError).font(.system(size: 13)).foregroundStyle(errorColor)
-                }
+            }
+            if profile.isAdmin {
+                LabeledContent("Role") { StatusBadge("Admin", tint: .blue) }
             }
         }
     }
@@ -120,182 +88,168 @@ public struct AccountView: View {
     // MARK: - Password
 
     private func passwordSection(_ profile: AccountProfile) -> some View {
-        sectionCard(title: "Password") {
-            VStack(alignment: .leading, spacing: 14) {
-                infoRow(label: "Status", value: profile.hasPassword ? "Password set" : "No password (passkey only)")
-
-                if profile.hasPassword {
-                    VStack(alignment: .leading, spacing: 6) {
-                        fieldLabel("Current password")
-                        glassTextField(label: "Current password") {
-                            SecureField("", text: $currentPassword)
-                                .textContentType(.password)
-                        }
-                    }
-                }
-                VStack(alignment: .leading, spacing: 6) {
-                    fieldLabel("New password")
-                    glassTextField(label: "New password") {
-                        SecureField("", text: $newPassword)
-                            .textContentType(.newPassword)
-                    }
-                }
-                VStack(alignment: .leading, spacing: 6) {
-                    fieldLabel("Confirm password")
-                    glassTextField(label: "Confirm password") {
-                        SecureField("", text: $confirmPassword)
-                            .textContentType(.newPassword)
-                    }
-                }
-
-                if let passwordMessage {
-                    Text(passwordMessage.text)
-                        .font(.system(size: 13))
-                        .foregroundStyle(passwordMessage.isError ? errorColor : successColor)
-                }
-
-                Button {
-                    Task { await changePassword(hasPassword: profile.hasPassword) }
-                } label: {
-                    buttonLabel(profile.hasPassword ? "Change password" : "Set password", isLoading: isSavingPassword)
-                }
-                .buttonStyle(.glassProminent)
-                .tint(.white.opacity(0.18))
-                .disabled(
-                    isSavingPassword
-                        || newPassword.count < 8
-                        || newPassword != confirmPassword
-                        || (profile.hasPassword && currentPassword.isEmpty)
-                )
+        Section {
+            if profile.hasPassword {
+                SecureField("Current Password", text: $currentPassword)
+                    .textContentType(.password)
             }
-        }
-    }
-
-    // MARK: - TOTP
-
-    private func totpSection(_ profile: AccountProfile) -> some View {
-        sectionCard(title: "Two-factor authentication (TOTP)") {
-            VStack(alignment: .leading, spacing: 14) {
+            SecureField("New Password", text: $newPassword)
+                .textContentType(.newPassword)
+            SecureField("Confirm Password", text: $confirmPassword)
+                .textContentType(.newPassword)
+            Button {
+                Task { await changePassword(hasPassword: profile.hasPassword) }
+            } label: {
                 HStack {
-                    Text("Status").font(.system(size: 14)).foregroundStyle(Color(white: 0.45))
+                    Text(profile.hasPassword ? "Change Password" : "Set Password")
                     Spacer()
-                    statusBadge(profile.totpEnabled ? "Enabled" : "Disabled", positive: profile.totpEnabled)
+                    if isSavingPassword { ProgressView() }
                 }
-
-                if profile.totpEnabled {
-                    VStack(alignment: .leading, spacing: 6) {
-                        fieldLabel("Current code")
-                        glassTextField(label: "Current code") {
-                            TextField("······", text: $totpCode)
-                                .textContentType(.oneTimeCode)
-                                #if os(iOS)
-                                .keyboardType(.numberPad)
-                                #endif
-                        }
-                    }
-                    totpMessageView
-                    Button {
-                        Task { await disableTOTP() }
-                    } label: {
-                        buttonLabel("Disable 2FA", isLoading: isTOTPBusy)
-                    }
-                    .buttonStyle(.glass)
-                    .tint(errorColor.opacity(0.3))
-                    .disabled(totpCode.count != 6 || isTOTPBusy)
-                } else if let totpSetup {
-                    if let qr = QRCodeGenerator.image(for: totpSetup.otpauthUri) {
-                        qr.interpolation(.none)
-                            .resizable()
-                            .frame(width: 160, height: 160)
-                            .padding(8)
-                            .glassEffect(.regular, in: .rect(cornerRadius: 14))
-                    }
-                    Text("Or enter the code manually: \(totpSetup.secret)")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Color(white: 0.5))
-                    VStack(alignment: .leading, spacing: 6) {
-                        fieldLabel("Confirmation code")
-                        glassTextField(label: "Confirmation code") {
-                            TextField("······", text: $totpCode)
-                                .textContentType(.oneTimeCode)
-                                #if os(iOS)
-                                .keyboardType(.numberPad)
-                                #endif
-                        }
-                    }
-                    totpMessageView
-                    Button {
-                        Task { await completeTOTPSetup() }
-                    } label: {
-                        buttonLabel("Confirm", isLoading: isTOTPBusy)
-                    }
-                    .buttonStyle(.glassProminent)
-                    .tint(.white.opacity(0.18))
-                    .disabled(totpCode.count != 6 || isTOTPBusy)
-                } else {
-                    Button {
-                        Task { await beginTOTPSetup() }
-                    } label: {
-                        buttonLabel("Set up 2FA", isLoading: isTOTPBusy)
-                    }
-                    .buttonStyle(.glass)
-                }
+            }
+            .disabled(
+                isSavingPassword
+                    || newPassword.count < 8
+                    || newPassword != confirmPassword
+                    || (profile.hasPassword && currentPassword.isEmpty)
+            )
+        } header: {
+            Text("Password")
+        } footer: {
+            if passwordUpdated {
+                Label("Password updated", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+            } else if !newPassword.isEmpty, newPassword.count < 8 {
+                Text("Use at least 8 characters.")
+            } else if !confirmPassword.isEmpty, newPassword != confirmPassword {
+                Text("The passwords don't match.")
+            } else if !profile.hasPassword {
+                Text("This account signs in with a passkey only.")
             }
         }
     }
+
+    // MARK: - Two-factor
 
     @ViewBuilder
-    private var totpMessageView: some View {
-        if let totpMessage {
-            Text(totpMessage.text)
-                .font(.system(size: 13))
-                .foregroundStyle(totpMessage.isError ? errorColor : successColor)
+    private func totpSection(_ profile: AccountProfile) -> some View {
+        Section {
+            LabeledContent("Status") {
+                StatusBadge(profile.totpEnabled ? "On" : "Off", tint: profile.totpEnabled ? .green : .secondary)
+            }
+
+            if profile.totpEnabled {
+                codeField("Current Code")
+                Button(role: .destructive) {
+                    Task { await disableTOTP() }
+                } label: {
+                    HStack {
+                        Text("Turn Off Two-Factor")
+                        Spacer()
+                        if isTOTPBusy { ProgressView() }
+                    }
+                }
+                .disabled(totpCode.count != 6 || isTOTPBusy)
+            } else if let totpSetup {
+                if let qr = QRCodeGenerator.image(for: totpSetup.otpauthUri) {
+                    qr.interpolation(.none)
+                        .resizable()
+                        .frame(width: 180, height: 180)
+                        .padding(10)
+                        .background(.white, in: .rect(cornerRadius: 12))
+                        .frame(maxWidth: .infinity)
+                        .accessibilityLabel("Setup QR code")
+                }
+                LabeledContent("Setup Key") {
+                    Text(totpSetup.secret)
+                        .font(.footnote.monospaced())
+                        .textSelection(.enabled)
+                }
+                Button("Copy Setup Key", systemImage: "doc.on.doc") { copyToClipboard(totpSetup.secret) }
+                codeField("Code from Your App")
+                Button {
+                    Task { await completeTOTPSetup() }
+                } label: {
+                    HStack {
+                        Text("Confirm")
+                        Spacer()
+                        if isTOTPBusy { ProgressView() }
+                    }
+                }
+                .disabled(totpCode.count != 6 || isTOTPBusy)
+            } else {
+                Button {
+                    Task { await beginTOTPSetup() }
+                } label: {
+                    HStack {
+                        Text("Set Up Two-Factor")
+                        Spacer()
+                        if isTOTPBusy { ProgressView() }
+                    }
+                }
+                .disabled(isTOTPBusy)
+            }
+        } header: {
+            Text("Two-Factor Authentication")
+        } footer: {
+            if totpSetup != nil, !profile.totpEnabled {
+                Text("Scan the code with an authenticator app, or enter the setup key by hand, then type the 6-digit code it shows.")
+            }
         }
+    }
+
+    private func codeField(_ title: String) -> some View {
+        TextField(title, text: $totpCode)
+            .textContentType(.oneTimeCode)
+            .monospacedDigit()
+            #if os(iOS)
+            .keyboardType(.numberPad)
+            #endif
+            .onChange(of: totpCode) { _, newValue in
+                let digits = String(newValue.filter(\.isNumber).prefix(6))
+                if digits != newValue { totpCode = digits }
+            }
     }
 
     // MARK: - Sessions
 
     private func sessionsSection(_ profile: AccountProfile) -> some View {
-        sectionCard(title: "Active sessions") {
-            VStack(alignment: .leading, spacing: 12) {
-                ForEach(Array(profile.sessions.enumerated()), id: \.element.id) { index, session in
-                    sessionRow(session)
-                    if index < profile.sessions.count - 1 {
-                        Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1)
+        Section("Active Sessions") {
+            ForEach(profile.sessions) { session in
+                sessionRow(session)
+                    .swipeActions {
+                        if !session.current {
+                            Button("Revoke", role: .destructive) {
+                                Task { await revokeSession(session.id) }
+                            }
+                        }
                     }
-                }
+                    .contextMenu {
+                        if !session.current {
+                            Button("Revoke", systemImage: "xmark.circle", role: .destructive) {
+                                Task { await revokeSession(session.id) }
+                            }
+                        }
+                    }
             }
         }
     }
 
     private func sessionRow(_ session: AccountSession) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 Text(session.deviceInfo ?? "Unknown device")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(.white)
+                    .lineLimit(1)
                 if session.current {
-                    statusBadge("Current", positive: true)
+                    StatusBadge("This device", tint: .green)
                 }
-                statusBadge(session.authMethod, positive: false)
-                Spacer()
-                if !session.current {
-                    Button {
-                        Task { await revokeSession(session.id) }
-                    } label: {
-                        Text("Revoke")
-                            .font(.system(size: 13))
-                            .foregroundStyle(errorColor)
-                            .padding(.vertical, 10)
-                            .padding(.horizontal, 6)
-                    }
-                    .buttonStyle(.plain)
-                }
+                Spacer(minLength: 0)
+                StatusBadge(session.authMethod)
             }
             Text(sessionSubtitle(session))
-                .font(.system(size: 12))
-                .foregroundStyle(Color(white: 0.45))
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
+        .padding(.vertical, 2)
     }
 
     private func sessionSubtitle(_ session: AccountSession) -> String {
@@ -310,106 +264,42 @@ public struct AccountView: View {
     private func relativeDate(_ iso: String) -> String? {
         let withFractional = ISO8601DateFormatter()
         withFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        let plain = ISO8601DateFormatter()
-        guard let date = withFractional.date(from: iso) ?? plain.date(from: iso) else { return nil }
-        let relative = RelativeDateTimeFormatter()
-        relative.unitsStyle = .short
-        return relative.localizedString(for: date, relativeTo: Date())
-    }
-
-    // MARK: - Shared building blocks
-
-    private func sectionCard<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text(title.uppercased())
-                .font(.system(size: 12, weight: .semibold))
-                .tracking(1)
-                .foregroundStyle(Color(white: 0.5))
-            content()
-        }
-        .padding(20)
-        .glassEffect(.regular.tint(.white.opacity(0.03)), in: .rect(cornerRadius: 18))
-    }
-
-    private func infoRow(label: String, value: String) -> some View {
-        HStack {
-            Text(label).foregroundStyle(Color(white: 0.45))
-            Spacer()
-            Text(value).foregroundStyle(.white)
-        }
-        .font(.system(size: 14))
-    }
-
-    private func fieldLabel(_ text: String) -> some View {
-        Text(text.uppercased())
-            .font(.system(size: 11, weight: .medium))
-            .tracking(0.6)
-            .foregroundStyle(Color(white: 0.45))
-    }
-
-    private func glassTextField<Content: View>(label: String, @ViewBuilder content: () -> Content) -> some View {
-        content()
-            .textFieldStyle(.plain)
-            .foregroundStyle(.white)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .glassEffect(.regular, in: .rect(cornerRadius: 10))
-            // `fieldLabel` above is a styled caption, not an accessible one — VoiceOver
-            // doesn't associate sibling text with a field on its own.
-            .accessibilityLabel(label)
-    }
-
-    private func statusBadge(_ text: String, positive: Bool) -> some View {
-        Text(text.uppercased())
-            .font(.system(size: 10, weight: .semibold))
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .foregroundStyle(positive ? successColor : Color(white: 0.6))
-            .glassEffect(.regular, in: .capsule)
-    }
-
-    private func buttonLabel(_ title: String, isLoading: Bool) -> some View {
-        HStack(spacing: 8) {
-            if isLoading {
-                ProgressView().controlSize(.small).tint(.white)
-            }
-            Text(title).font(.system(size: 14, weight: .semibold))
-        }
-        .foregroundStyle(.white)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
+        guard let date = withFractional.date(from: iso) ?? ISO8601DateFormatter().date(from: iso) else { return nil }
+        return date.formatted(.relative(presentation: .named))
     }
 
     // MARK: - Actions
 
     private func loadProfile() async {
-        isLoading = true
-        loadError = nil
-        defer { isLoading = false }
         do {
             let fetched = try await accountClient.profile()
             profile = fetched
             displayNameDraft = fetched.displayName
+            loadError = nil
         } catch {
-            loadError = apiErrorMessage(error)
+            if profile == nil {
+                loadError = apiErrorMessage(error)
+            } else {
+                errorMessage = apiErrorMessage(error)
+            }
         }
     }
 
     private func saveDisplayName() async {
+        guard let profile, canSaveName(profile) else { return }
         isSavingName = true
-        nameSaveError = nil
         defer { isSavingName = false }
         do {
             try await accountClient.updateDisplayName(displayNameDraft.trimmingCharacters(in: .whitespacesAndNewlines))
             await loadProfile()
         } catch {
-            nameSaveError = apiErrorMessage(error)
+            errorMessage = apiErrorMessage(error)
         }
     }
 
     private func changePassword(hasPassword: Bool) async {
         isSavingPassword = true
-        passwordMessage = nil
+        passwordUpdated = false
         defer { isSavingPassword = false }
         do {
             try await accountClient.changePassword(
@@ -419,27 +309,26 @@ public struct AccountView: View {
             currentPassword = ""
             newPassword = ""
             confirmPassword = ""
-            passwordMessage = ("Password updated", false)
+            passwordUpdated = true
             await loadProfile()
         } catch {
-            passwordMessage = (apiErrorMessage(error), true)
+            errorMessage = apiErrorMessage(error)
         }
     }
 
     private func beginTOTPSetup() async {
         isTOTPBusy = true
-        totpMessage = nil
         defer { isTOTPBusy = false }
         do {
+            totpCode = ""
             totpSetup = try await accountClient.beginTOTPSetup()
         } catch {
-            totpMessage = (apiErrorMessage(error), true)
+            errorMessage = apiErrorMessage(error)
         }
     }
 
     private func completeTOTPSetup() async {
         isTOTPBusy = true
-        totpMessage = nil
         defer { isTOTPBusy = false }
         do {
             try await accountClient.completeTOTPSetup(code: totpCode)
@@ -447,20 +336,19 @@ public struct AccountView: View {
             totpSetup = nil
             await loadProfile()
         } catch {
-            totpMessage = (apiErrorMessage(error), true)
+            errorMessage = apiErrorMessage(error)
         }
     }
 
     private func disableTOTP() async {
         isTOTPBusy = true
-        totpMessage = nil
         defer { isTOTPBusy = false }
         do {
             try await accountClient.disableTOTP(code: totpCode)
             totpCode = ""
             await loadProfile()
         } catch {
-            totpMessage = (apiErrorMessage(error), true)
+            errorMessage = apiErrorMessage(error)
         }
     }
 
@@ -469,7 +357,7 @@ public struct AccountView: View {
             try await accountClient.revokeSession(id)
             await loadProfile()
         } catch {
-            loadError = apiErrorMessage(error)
+            errorMessage = apiErrorMessage(error)
         }
     }
 }

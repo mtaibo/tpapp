@@ -58,13 +58,13 @@ final class PhotoBackupContinuedTask {
 
         let request = BGContinuedProcessingTaskRequest(
             identifier: identifier,
-            title: "Copia de fotos",
-            subtitle: "Preparando…"
+            title: "Photo Backup",
+            subtitle: "Preparing…"
         )
         // Fail instead of queueing: a backup that only starts minutes later, after the user has
         // moved on, would be more confusing than one that just runs in the foreground.
         request.strategy = .fail
-        try? BGTaskScheduler.shared.submit(request)
+        BGTaskScheduler.shared.submitTaskRequest(request) { _ in }
     }
 
     func update(completed: Int, total: Int) {
@@ -87,8 +87,8 @@ final class PhotoBackupContinuedTask {
         // Total stays 0 (indeterminate) while the library is still being scanned/checked.
         task.progress.totalUnitCount = Int64(lastTotal)
         task.progress.completedUnitCount = Int64(lastCompleted)
-        let subtitle = lastTotal == 0 ? "Preparando…" : "\(lastCompleted) de \(lastTotal) fotos"
-        task.updateTitle("Copia de fotos", subtitle: subtitle)
+        let subtitle = lastTotal == 0 ? "Preparing…" : "\(lastCompleted) of \(lastTotal) photos"
+        task.updateTitle("Photo Backup", subtitle: subtitle)
     }
 }
 #endif

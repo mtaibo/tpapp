@@ -26,21 +26,15 @@ public enum PhotoThumbnailCache {
         directory.appendingPathComponent("\(checksum).jpg")
     }
 
-    public static func exists(forChecksum checksum: String) -> Bool {
-        FileManager.default.fileExists(atPath: path(forChecksum: checksum).path)
+    /// Where this checksum's thumbnail lives on disk, whether or not it's been written yet — the
+    /// gallery hands it to `ImagePipeline`, which reads it off the main thread and falls back to
+    /// the network when it isn't there.
+    public static func fileURL(forChecksum checksum: String) -> URL {
+        path(forChecksum: checksum)
     }
 
-    public static func image(forChecksum checksum: String) -> Image? {
-        guard let data = try? Data(contentsOf: path(forChecksum: checksum)) else { return nil }
-        #if os(iOS)
-        guard let platformImage = UIImage(data: data) else { return nil }
-        return Image(uiImage: platformImage)
-        #elseif os(macOS)
-        guard let platformImage = NSImage(data: data) else { return nil }
-        return Image(nsImage: platformImage)
-        #else
-        return nil
-        #endif
+    public static func exists(forChecksum checksum: String) -> Bool {
+        FileManager.default.fileExists(atPath: path(forChecksum: checksum).path)
     }
 
     /// No-ops if this checksum is already cached. `isNetworkAccessAllowed = false` means an

@@ -1,45 +1,79 @@
 import SwiftUI
 import TPCore
+import TPUI
 #if os(iOS)
 import UIKit
 #endif
 
+/// Which part of the Photos tab is showing, picked from the segmented control in the nav bar.
+enum PhotosSection: String, CaseIterable {
+    case library, albums, shared
+
+    var title: String {
+        switch self {
+        case .library: return "Library"
+        case .albums: return "Albums"
+        case .shared: return "Shared"
+        }
+    }
+}
+
 public struct PhotoGalleryView: View {
     @ObservedObject var store: PhotoGalleryStore
     @ObservedObject var syncStore: PhotoSyncStore
-    @ObservedObject var tabBarState: PhotosTabBarState
     let client: PhotosClient
     let ownerEmail: String
     let isAdmin: Bool
 
     @Environment(\.openURL) private var openURL
-    @State private var selectedPhoto: Photo?
-    @State private var topBarHeight: CGFloat = 120
+    @State private var section: PhotosSection = .library
+    /// The album last picked under Albums; independent of `section` so a trip to Shared and back
+    /// to Library keeps it.
+    @State private var albumFilter: PhotosClient.Filter = .all
+    @State private var detailPhotoID: Int?
     @State private var isStatusPresented = false
     /// The success message whose ✓ has already been shown for a few seconds and hidden.
     @State private var dismissedMessage: String?
-    /// The Albums tile last tapped — independent of `tabBarState.section` so switching to
-    /// Shared and back to Gallery never loses it.
-    @State private var galleryFilter: PhotosClient.Filter = .all
 
-    public init(store: PhotoGalleryStore, syncStore: PhotoSyncStore, tabBarState: PhotosTabBarState, client: PhotosClient, ownerEmail: String, isAdmin: Bool = false) {
+    // Grid density. One pinch steps one level, like the native Photos app.
+    private static let columnLevels = [1, 3, 5, 9, 15]
+    @AppStorage("photos.columnLevel") private var columnLevelIndex = 1
+    @State private var scrollPosition = ScrollPosition(idType: Int.self)
+    @State private var visiblePhotoIDs: [Int] = []
+    /// Set once the current pinch has stepped the grid, so one continuous pinch never skips
+    /// several levels at once.
+    @State private var pinchConsumed = false
+
+    public init(store: PhotoGalleryStore, syncStore: PhotoSyncStore, client: PhotosClient, ownerEmail: String, isAdmin: Bool = false) {
         self.store = store
         self.syncStore = syncStore
-        self.tabBarState = tabBarState
         self.client = client
         self.ownerEmail = ownerEmail
         self.isAdmin = isAdmin
     }
 
     private var effectiveFilter: PhotosClient.Filter {
-        tabBarState.section == .shared ? .shared : galleryFilter
+        section == .shared ? .shared : albumFilter
     }
 
     public var body: some View {
-        ZStack(alignment: .top) {
-            TPPhotosTheme.background.ignoresSafeArea()
-            content
-            toolbar
+        NavigationStack {
+            Group {
+                switch section {
+                case .albums:
+                    AlbumsListView(selected: albumFilter) { filter in
+                        albumFilter = filter
+                        withAnimation(.snappy) { section = .library }
+                    }
+                case .library, .shared:
+                    galleryContent
+                }
+            }
+            .navigationTitle(section.title)
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar { toolbarContent }
         }
         .task {
             store.filter = effectiveFilter
@@ -48,55 +82,66 @@ public struct PhotoGalleryView: View {
         .onChange(of: effectiveFilter) { _, newValue in
             store.filter = newValue
         }
-        .sheet(item: $selectedPhoto) { photo in
-            PhotoDetailView(photo: photo, client: client) {
-                Task { await store.delete(photo) }
-            }
+        #if os(iOS)
+        .fullScreenCover(item: detailBinding) { selection in
+            detail(startingAt: selection.id)
+        }
+        #else
+        .sheet(item: detailBinding) { selection in
+            detail(startingAt: selection.id)
+                .frame(minWidth: 720, minHeight: 540)
+        }
+        #endif
+    }
+
+    private struct DetailSelection: Identifiable {
+        let id: Int
+    }
+
+    private var detailBinding: Binding<DetailSelection?> {
+        Binding(
+            get: { detailPhotoID.map(DetailSelection.init) },
+            set: { detailPhotoID = $0?.id }
+        )
+    }
+
+    private func detail(startingAt id: Int) -> some View {
+        PhotoDetailView(photos: displayedPhotos, initialPhotoID: id, client: client) { photo in
+            Task { await store.delete(photo) }
         }
     }
 
     // MARK: - Toolbar
 
-    private var toolbarTitle: String {
-        switch tabBarState.section {
-        case .albums: return "Albums"
-        case .gallery: return "Photos"
-        case .shared: return "Shared"
-        }
-    }
-
-    private var toolbar: some View {
-        GlassEffectContainer(spacing: 10) {
-            HStack {
-                Text(toolbarTitle)
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(.white)
-                Spacer()
-                if hasStatus {
-                    statusButton
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .principal) {
+            Picker("Section", selection: $section.animation(.snappy)) {
+                ForEach(PhotosSection.allCases, id: \.self) { item in
+                    Text(item.title).tag(item)
                 }
-                menuButton
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 14)
+            .pickerStyle(.segmented)
+            .fixedSize()
         }
-        .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { topBarHeight = $0 }
+        ToolbarItemGroup(placement: .primaryAction) {
+            if hasStatus {
+                statusButton
+            }
+            menuButton
+        }
     }
 
-    private var hasStatus: Bool {
+    private var isBusy: Bool {
         syncStore.isRunning || syncStore.isSanitizing || syncStore.isChecking
-            || syncStore.lastError != nil
-            || (successMessage != nil && successMessage != dismissedMessage)
     }
 
     private var successMessage: String? {
         syncStore.lastSanitizeMessage ?? syncStore.lastCheckMessage
     }
 
-    /// Sits next to the ellipsis menu: a ring that fills up while a backup uploads, a spinner for
-    /// Check/Sanitize, or the last run's outcome. Tapping it explains the status in full.
-    private var isBusy: Bool {
-        syncStore.isRunning || syncStore.isSanitizing || syncStore.isChecking
+    private var hasStatus: Bool {
+        isBusy || syncStore.lastError != nil || (successMessage != nil && successMessage != dismissedMessage)
     }
 
     private struct StatusDismissKey: Equatable {
@@ -105,110 +150,305 @@ public struct PhotoGalleryView: View {
         let isBusy: Bool
     }
 
+    /// Sits next to the ••• menu: a ring that fills up while a backup uploads, a spinner for
+    /// Check/Sanitize, or the last run's outcome. Tapping it explains the status in full.
     private var statusButton: some View {
         Button {
             isStatusPresented.toggle()
         } label: {
             Group {
                 if syncStore.isRunning {
-                    progressRing
-                } else if syncStore.isSanitizing || syncStore.isChecking {
-                    ProgressView().tint(.white)
+                    BackupProgressRing(fraction: syncStore.progressTotal == 0 ? nil : syncStore.progressFraction)
+                } else if isBusy {
+                    ProgressView()
                 } else if syncStore.lastError != nil {
-                    Image(systemName: "exclamationmark")
-                        .font(.system(size: ellipsisIconFontSize, weight: .semibold))
-                        .foregroundStyle(TPPhotosTheme.danger)
+                    Image(systemName: "exclamationmark.icloud")
+                        .foregroundStyle(.red)
                 } else {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: ellipsisIconFontSize, weight: .semibold))
-                        .foregroundStyle(.white)
+                    Image(systemName: "checkmark.icloud")
                 }
             }
-            .frame(width: ellipsisIconDimension, height: ellipsisIconDimension)
+            .frame(width: 24, height: 24)
         }
-        .buttonStyle(.glass)
-        .buttonBorderShape(.circle)
-        .accessibilityLabel("Backup status")
+        .accessibilityLabel("Backup Status")
         .task(id: StatusDismissKey(message: successMessage, isPresented: isStatusPresented, isBusy: isBusy)) {
             // Errors stay until acted on; a plain success ✓ only lingers briefly — and never
             // vanishes while its popover is open or another run is underway.
             if isBusy { dismissedMessage = nil } // a new run's result may repeat the old text
-            guard let message = successMessage, syncStore.lastError == nil,
-                  !isStatusPresented, !isBusy else { return }
+            guard let message = successMessage, syncStore.lastError == nil, !isStatusPresented, !isBusy else { return }
             try? await Task.sleep(for: .seconds(4))
             guard !Task.isCancelled else { return }
             withAnimation { dismissedMessage = message }
         }
-        .popover(isPresented: $isStatusPresented, arrowEdge: .top) {
-            statusDetail
-                .padding(16)
-                .frame(width: 280, alignment: .leading)
+        .popover(isPresented: $isStatusPresented) {
+            BackupStatusDetail(syncStore: syncStore) { url in openURL(url) }
+                .padding()
+                .frame(width: 300, alignment: .leading)
                 .presentationCompactAdaptation(.popover)
         }
     }
 
-    private var progressRing: some View {
-        ZStack {
-            Circle()
-                .stroke(Color.white.opacity(0.2), lineWidth: 2.5)
-            if syncStore.progressTotal == 0 {
-                // Still scanning/checking which photos are new: no fraction to show yet.
-                ProgressView().tint(.white).controlSize(.small)
-            } else {
-                Circle()
-                    .trim(from: 0, to: syncStore.progressFraction)
-                    .stroke(Color.white, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
-                    .animation(.easeOut, value: syncStore.progressFraction)
+    private var menuButton: some View {
+        Menu {
+            Section {
+                Button("Back Up Now", systemImage: "icloud.and.arrow.up") {
+                    Task {
+                        await syncStore.backupNow(ownerEmail: ownerEmail)
+                        await store.reload()
+                    }
+                }
+                Button("Check Library", systemImage: "checkmark.icloud") {
+                    Task {
+                        await syncStore.checkNow(ownerEmail: ownerEmail)
+                        await store.reload()
+                    }
+                }
+                if isAdmin {
+                    Button("Sanitize Server", systemImage: "wand.and.stars") {
+                        Task { await syncStore.sanitizeNow() }
+                    }
+                }
             }
+            .disabled(isBusy)
+
+            if section != .albums {
+                // The pinch gesture's equivalent for VoiceOver, keyboards and Macs without a trackpad.
+                Section {
+                    Button("Zoom In", systemImage: "plus.magnifyingglass") { stepColumns(by: -1) }
+                        .disabled(columnLevelIndex == 0)
+                    Button("Zoom Out", systemImage: "minus.magnifyingglass") { stepColumns(by: 1) }
+                        .disabled(columnLevelIndex == Self.columnLevels.count - 1)
+                }
+            }
+        } label: {
+            Label("More", systemImage: "ellipsis")
         }
-        .padding(4)
+        .menuIndicator(.hidden)
+    }
+
+    // MARK: - Grid
+
+    /// Oldest first, so the newest photo sits at the bottom of the grid like the Photos app.
+    /// (The API pages newest-first; this used to be done by flipping the whole scroll view
+    /// upside down, which also reversed VoiceOver order and broke the pinch gesture.)
+    private var displayedPhotos: [Photo] {
+        store.photos.reversed()
+    }
+
+    private var columnCount: Int {
+        Self.columnLevels[min(max(columnLevelIndex, 0), Self.columnLevels.count - 1)]
+    }
+
+    private var spacing: CGFloat { columnCount >= 9 ? 1 : 2 }
+
+    /// Bigger thumbnails as tiles grow, so zooming in doesn't just blow up a blurry one.
+    private var thumbnailSize: Int {
+        switch columnCount {
+        case 1: return 800
+        case 3: return 400
+        case 5: return 240
+        default: return 120
+        }
     }
 
     @ViewBuilder
-    private var statusDetail: some View {
-        if syncStore.isRunning {
-            VStack(alignment: .leading, spacing: 8) {
+    private var galleryContent: some View {
+        if store.isLoading && store.photos.isEmpty {
+            ProgressView()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let error = store.errorMessage, store.photos.isEmpty {
+            ContentUnavailableView {
+                Label("Couldn't Load Photos", systemImage: "exclamationmark.triangle")
+            } description: {
+                Text(error)
+            } actions: {
+                Button("Try Again") { Task { await store.reload() } }
+            }
+        } else if store.photos.isEmpty {
+            ContentUnavailableView {
+                Label(section == .shared ? "No Shared Photos" : "No Photos Yet", systemImage: "photo.on.rectangle")
+            } description: {
+                if section == .library {
+                    Text("Back up this device's library from the ••• menu.")
+                }
+            }
+        } else {
+            grid
+        }
+    }
+
+    private var grid: some View {
+        let photos = displayedPhotos
+        let count = photos.count
+        return ScrollView {
+            LazyVGrid(
+                columns: Array(repeating: GridItem(.flexible(), spacing: spacing), count: columnCount),
+                spacing: spacing
+            ) {
+                ForEach(Array(photos.enumerated()), id: \.element.id) { offset, photo in
+                    tile(for: photo)
+                        .onAppear {
+                            // `store` indexes newest-first; the grid shows oldest-first.
+                            Task { await store.loadMoreIfNeeded(currentIndex: count - 1 - offset) }
+                        }
+                }
+            }
+            .scrollTargetLayout()
+
+            if store.isLoadingMore {
+                ProgressView().padding()
+            }
+        }
+        .scrollPosition($scrollPosition)
+        // Open on the newest photos, and keep the view still while older pages are added above.
+        .defaultScrollAnchor(.bottom)
+        .defaultScrollAnchor(.bottom, for: .sizeChanges)
+        .onScrollTargetVisibilityChange(idType: Int.self, threshold: 0.5) { ids in
+            visiblePhotoIDs = ids
+        }
+        // Simultaneous, not `.gesture`: a plain gesture on a ScrollView loses every two-finger
+        // touch to the scroll view's own pan, which is why pinching never changed the columns.
+        .simultaneousGesture(pinchGesture)
+        .refreshable { await store.reload() }
+    }
+
+    private func tile(for photo: Photo) -> some View {
+        Button {
+            detailPhotoID = photo.id
+        } label: {
+            Color.clear
+                .aspectRatio(1, contentMode: .fit)
+                .overlay {
+                    RemoteImage(
+                        url: client.thumbnailURL(for: photo, size: thumbnailSize),
+                        // The on-device cache holds small thumbnails only; bigger tiles fetch.
+                        localFile: thumbnailSize <= 400 ? PhotoThumbnailCache.fileURL(forChecksum: photo.checksum) : nil
+                    )
+                }
+                .clipShape(.rect(cornerRadius: columnCount >= 9 ? 0 : 4))
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .id(photo.id)
+        .accessibilityLabel(accessibilityLabel(for: photo))
+    }
+
+    private func accessibilityLabel(for photo: Photo) -> String {
+        var parts = [photo.isScreenshot ? "Screenshot" : "Photo"]
+        if let takenAt = photo.takenAt.flatMap(PhotoDates.parse) {
+            parts.append(takenAt.formatted(date: .long, time: .shortened))
+        }
+        return parts.joined(separator: ", ")
+    }
+
+    private var pinchGesture: some Gesture {
+        MagnifyGesture(minimumScaleDelta: 0.05)
+            .onChanged { value in
+                guard !pinchConsumed else { return }
+                if value.magnification > 1.25 {
+                    pinchConsumed = true
+                    stepColumns(by: -1)
+                } else if value.magnification < 0.8 {
+                    pinchConsumed = true
+                    stepColumns(by: 1)
+                }
+            }
+            .onEnded { _ in
+                pinchConsumed = false
+            }
+    }
+
+    /// Negative zooms in (fewer, bigger columns). Keeps the photo that was in the middle of the
+    /// screen in the middle afterwards, instead of jumping to wherever the new layout puts the
+    /// same scroll offset.
+    private func stepColumns(by delta: Int) {
+        let newIndex = min(max(columnLevelIndex + delta, 0), Self.columnLevels.count - 1)
+        guard newIndex != columnLevelIndex else { return }
+        let anchorID = visiblePhotoIDs.isEmpty ? nil : visiblePhotoIDs[visiblePhotoIDs.count / 2]
+        #if os(iOS)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        #endif
+        withAnimation(.snappy(duration: 0.3)) {
+            columnLevelIndex = newIndex
+            if let anchorID {
+                scrollPosition.scrollTo(id: anchorID, anchor: .center)
+            }
+        }
+    }
+}
+
+/// The ring in the status button: fills with the backup's progress, or spins while the library is
+/// still being scanned and there's no fraction to show yet.
+private struct BackupProgressRing: View {
+    let fraction: Double?
+
+    var body: some View {
+        ZStack {
+            Circle().stroke(.secondary.opacity(0.35), lineWidth: 2.5)
+            if let fraction {
+                Circle()
+                    .trim(from: 0, to: fraction)
+                    .stroke(.tint, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .animation(.easeOut, value: fraction)
+            } else {
+                ProgressView().controlSize(.mini)
+            }
+        }
+        .padding(2)
+    }
+}
+
+/// The status popover's contents: what's running, how far along, and what went wrong.
+private struct BackupStatusDetail: View {
+    @ObservedObject var syncStore: PhotoSyncStore
+    let openURL: (URL) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if syncStore.isRunning {
                 HStack {
-                    Text("Subiendo fotos")
-                        .font(.system(size: 14, weight: .semibold))
+                    Text("Backing Up Photos").font(.headline)
                     Spacer()
                     if syncStore.progressTotal > 0 {
-                        Text("\(Int(syncStore.progressFraction * 100))%")
-                            .font(.system(size: 14, weight: .medium))
+                        Text(syncStore.progressFraction, format: .percent.precision(.fractionLength(0)))
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
                     }
                 }
                 if syncStore.progressTotal == 0 {
-                    ProgressView().progressViewStyle(.linear)
+                    ProgressView()
+                        .progressViewStyle(.linear)
+                    Text("Checking which photos are already backed up…")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 } else {
                     ProgressView(value: syncStore.progressFraction)
+                    Text(syncStore.progressLabel)
+                        .font(.footnote)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
                 }
-                Text(syncStore.progressTotal == 0 ? "Comprobando fotos existentes…" : syncStore.progressLabel)
-                    .font(.system(size: 12))
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
                 failureList
-            }
-        } else if syncStore.isSanitizing {
-            statusLine("Reorganizando fotos…", showsSpinner: true)
-        } else if syncStore.isChecking {
-            statusLine("Comprobando fotos…", showsSpinner: true)
-        } else if let error = syncStore.lastError {
-            VStack(alignment: .leading, spacing: 10) {
-                statusLine(error).foregroundStyle(TPPhotosTheme.danger)
+            } else if syncStore.isSanitizing {
+                Label("Reorganizing photos on the server…", systemImage: "wand.and.stars")
+            } else if syncStore.isChecking {
+                Label("Checking the library…", systemImage: "checkmark.icloud")
+            } else if let error = syncStore.lastError {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.red)
                 #if os(iOS)
                 if syncStore.permissionDenied, let url = URL(string: UIApplication.openSettingsURLString) {
                     Button("Open Settings") { openURL(url) }
-                        .font(.system(size: 13, weight: .medium))
                 }
                 #endif
                 failureList
+            } else if let message = syncStore.lastSanitizeMessage ?? syncStore.lastCheckMessage {
+                Label(message, systemImage: "checkmark.circle.fill")
             }
-        } else if let message = syncStore.lastSanitizeMessage ?? syncStore.lastCheckMessage {
-            statusLine(message)
         }
+        .font(.subheadline)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     /// The backup's failures grouped by reason, most frequent first.
@@ -219,273 +459,24 @@ public struct PhotoGalleryView: View {
                 ForEach(syncStore.failureReasons.sorted { $0.value > $1.value }, id: \.key) { reason, count in
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Text("\(count)")
-                            .font(.system(size: 12, weight: .semibold))
+                            .fontWeight(.semibold)
                             .monospacedDigit()
-                            .foregroundStyle(TPPhotosTheme.danger)
+                            .foregroundStyle(.red)
                         Text(reason)
-                            .font(.system(size: 12))
                             .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
                     }
+                    .font(.footnote)
                 }
             }
         }
-    }
-
-    private func statusLine(_ text: String, showsSpinner: Bool = false) -> some View {
-        HStack(spacing: 8) {
-            if showsSpinner { ProgressView().controlSize(.small) }
-            Text(text)
-                .font(.system(size: 13))
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .foregroundStyle(.secondary)
-    }
-
-    private var menuButton: some View {
-        Menu {
-            Button {
-                Task {
-                    await syncStore.backupNow(ownerEmail: ownerEmail)
-                    await store.reload()
-                }
-            } label: {
-                Label("Backup now", systemImage: "icloud.and.arrow.up")
-            }
-            Button {
-                Task {
-                    await syncStore.checkNow(ownerEmail: ownerEmail)
-                    await store.reload()
-                }
-            } label: {
-                Label("Check", systemImage: "checkmark.icloud")
-            }
-            if isAdmin {
-                Button {
-                    Task { await syncStore.sanitizeNow() }
-                } label: {
-                    Label("Sanitize", systemImage: "wand.and.stars")
-                }
-            }
-        } label: {
-            Group {
-                if syncStore.isRunning || syncStore.isSanitizing || syncStore.isChecking {
-                    ProgressView().tint(.white)
-                } else {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: ellipsisIconFontSize, weight: .medium))
-                        .foregroundStyle(.white)
-                }
-            }
-            .frame(width: ellipsisIconDimension, height: ellipsisIconDimension)
-        }
-        .menuIndicator(.hidden)
-        .buttonStyle(.glass)
-        .buttonBorderShape(.circle)
-        .disabled(syncStore.isRunning || syncStore.isSanitizing || syncStore.isChecking)
-        .accessibilityLabel("More actions")
-    }
-
-    // MARK: - Content
-
-    @ViewBuilder
-    private var content: some View {
-        switch tabBarState.section {
-        case .albums:
-            albumsContent
-        case .gallery, .shared:
-            galleryContent
-        }
-    }
-
-    /// Drives `tabBarState.isCollapsed` from scroll *direction* only, never absolute position —
-    /// in a lazy grid, `onScrollGeometryChange` reports offsets that get corrected as more rows
-    /// are measured, so a "snap collapsed/expanded past offset X" rule would drift; a delta
-    /// between two consecutive updates stays accurate regardless. Scrolling further into the
-    /// grid collapses the real tab bar into `PhotosCollapsedBar`; scrolling back toward the top
-    /// restores it — same as Apple's own Photos app. `onScrollGeometryChange`'s action runs off
-    /// the main actor (like `onGeometryChange`), so the actual state writes hop back to it.
-    private func trackingTabBarCollapse<Content: View>(_ view: Content) -> some View {
-        view.onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y }) { oldValue, newValue in
-            let delta = newValue - oldValue
-            guard delta > 6 || delta < -6 else { return }
-            let shouldCollapse = delta > 6
-            Task { @MainActor in
-                guard tabBarState.isCollapsed != shouldCollapse else { return }
-                withAnimation(.snappy) { tabBarState.isCollapsed = shouldCollapse }
-            }
-        }
-    }
-
-    private var albumsContent: some View {
-        trackingTabBarCollapse(
-            ScrollView {
-                VStack(spacing: 0) {
-                    Color.clear.frame(height: topBarHeight)
-                    AlbumsGridView { filter in
-                        galleryFilter = filter
-                        withAnimation(.snappy(duration: 0.25)) { tabBarState.section = .gallery }
-                    }
-                    .padding(.top, 16)
-                    .padding(.bottom, 24)
-                }
-            }
-        )
-    }
-
-    @ViewBuilder
-    private var galleryContent: some View {
-        if store.isLoading && store.photos.isEmpty {
-            VStack {
-                Spacer()
-                ProgressView().tint(.white)
-                Spacer()
-            }
-        } else if let error = store.errorMessage, store.photos.isEmpty {
-            VStack {
-                Spacer()
-                Text(error).foregroundStyle(TPPhotosTheme.danger)
-                Spacer()
-            }
-        } else if store.photos.isEmpty {
-            VStack {
-                Spacer()
-                Text("No photos yet")
-                    .font(.system(size: 14))
-                    .foregroundStyle(TPPhotosTheme.textMuted)
-                Spacer()
-            }
-        } else {
-            // Inverted-list trick: the API already returns newest-first with pagination toward
-            // older items, so flipping the whole scroll view 180° (and counter-flipping each
-            // tile's content) makes the newest photo land at the visual bottom — where the
-            // ScrollView naturally rests on first appearance — and "load more" naturally extends
-            // upward off-screen with no jump, all without touching PhotoGalleryStore's ordering.
-            // Note: because the whole stack below is y-flipped, its *local* top-to-bottom order
-            // renders as the *visual* bottom-to-top order — so the grid is listed first (it ends
-            // up visually at the bottom/newest end) and the top-bar clearance spacer last (it
-            // ends up visually at the very top, under the floating toolbar).
-            trackingTabBarCollapse(
-                ScrollView {
-                    VStack(spacing: 0) {
-                        LazyVGrid(columns: gridColumns, spacing: Self.tileSpacing) {
-                            ForEach(Array(store.photos.enumerated()), id: \.element.id) { index, photo in
-                                tile(for: photo)
-                                    .onAppear { Task { await store.loadMoreIfNeeded(currentIndex: index) } }
-                            }
-                        }
-                        .padding(.bottom, 24)
-
-                        if store.isLoadingMore {
-                            ProgressView().tint(.white).padding(.vertical, 16)
-                        }
-
-                        Color.clear.frame(height: topBarHeight)
-                    }
-                }
-                .scaleEffect(x: 1, y: -1)
-                .gesture(pinchZoomGesture)
-            )
-        }
-    }
-
-    // MARK: - Pinch-to-zoom grid density
-
-    /// The column counts the pinch gesture snaps between — 1 means "one photo at a time,
-    /// stacked for a vertical scroll" (fully zoomed in), 30 is the densest zoomed-out grid.
-    private static let columnLevels = [1, 3, 5, 15, 30]
-    private static let tileSpacing: CGFloat = 1
-
-    @State private var columnLevelIndex = 1 // columnLevels[1] == 3, the grid's starting density
-
-    private var columnCount: Int { Self.columnLevels[columnLevelIndex] }
-
-    private var gridColumns: [GridItem] {
-        Array(repeating: GridItem(.flexible(), spacing: Self.tileSpacing), count: columnCount)
-    }
-
-    /// Finer-grained thumbnails as tiles grow from a 30-across grid up to a single full-width
-    /// photo, so zooming in doesn't just blow up a blurry 160px thumbnail.
-    private var thumbnailSize: Int {
-        switch columnCount {
-        case 1: return 800
-        case 3: return 300
-        case 5: return 200
-        case 15: return 120
-        default: return 80
-        }
-    }
-
-    /// Only the gesture's *direction* past a deadzone matters — one pinch steps the grid one
-    /// level denser or sparser, same as the native Photos app's own zoom levels.
-    private var pinchZoomGesture: some Gesture {
-        MagnificationGesture()
-            .onEnded { value in
-                withAnimation(.snappy) {
-                    if value > 1.15 {
-                        columnLevelIndex = max(0, columnLevelIndex - 1)
-                    } else if value < 0.85 {
-                        columnLevelIndex = min(Self.columnLevels.count - 1, columnLevelIndex + 1)
-                    }
-                }
-            }
-    }
-
-    private func tile(for photo: Photo) -> some View {
-        Button {
-            selectedPhoto = photo
-        } label: {
-            GeometryReader { proxy in
-                Group {
-                    if let cached = PhotoThumbnailCache.image(forChecksum: photo.checksum) {
-                        cached
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                    } else {
-                        AsyncImage(url: client.thumbnailURL(for: photo, size: thumbnailSize)) { phase in
-                            if let image = phase.image {
-                                image
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fill)
-                            } else {
-                                Rectangle().fill(Color.white.opacity(0.05))
-                            }
-                        }
-                    }
-                }
-                .id(photo.id)
-                .frame(width: proxy.size.width, height: proxy.size.width)
-                .clipped()
-            }
-            .aspectRatio(1, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-        }
-        .buttonStyle(.plain)
-        .scaleEffect(x: 1, y: -1)
     }
 }
 
-// Mirrors TPStoreFeature's ellipsis Menu sizing: .buttonStyle(.glass) only adds chrome around
-// the label's own size rather than shrinking it, so the label itself must be sized small.
-private var ellipsisIconDimension: CGFloat {
-    #if os(macOS)
-    23
-    #else
-    30
-    #endif
-}
-
-private var ellipsisIconFontSize: CGFloat {
-    #if os(macOS)
-    12
-    #else
-    16
-    #endif
-}
-
-enum TPPhotosTheme {
-    static let background = Color.black
-    static let textPrimary = Color(white: 1.0)
-    static let textMuted = Color(red: 0.322, green: 0.322, blue: 0.322)
-    static let danger = Color(red: 1.0, green: 0.271, blue: 0.227)
+/// The server sends ISO-8601, sometimes with fractional seconds.
+enum PhotoDates {
+    static func parse(_ string: String) -> Date? {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fractional.date(from: string) ?? ISO8601DateFormatter().date(from: string)
+    }
 }

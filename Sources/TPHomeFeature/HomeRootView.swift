@@ -1,10 +1,11 @@
 import SwiftUI
+import TPUI
 
 public struct HomeRootView: View {
     @ObservedObject var store: HomeStore
-    @State private var section: Section = .blueprint
+    @AppStorage("home.section") private var section: Section = .blueprint
 
-    private enum Section: CaseIterable, Hashable {
+    private enum Section: String, CaseIterable, Hashable {
         case blueprint, blinds
 
         var title: String {
@@ -13,122 +14,70 @@ public struct HomeRootView: View {
             case .blinds: return "Blinds"
             }
         }
-
-        var icon: String {
-            switch self {
-            case .blueprint: return "square.grid.3x3.fill"
-            case .blinds: return "blinds.horizontal.closed"
-            }
-        }
     }
-
-    private static let accent = Color(red: 0 / 255, green: 122 / 255, blue: 255 / 255)
-    private static let sidebarBackground = Color(red: 17 / 255, green: 17 / 255, blue: 19 / 255)
-    private static let activePill = Color(white: 0.11)
 
     public init(store: HomeStore) {
         self.store = store
     }
 
     public var body: some View {
-        #if os(iOS)
-        ZStack(alignment: .top) {
-            content
-            sectionMenu
-        }
-        .background(Color.black.ignoresSafeArea())
-        .colorScheme(.dark)
-        #else
-        HStack(spacing: 0) {
-            sidebar
-            content
-        }
-        .background(Color.black.ignoresSafeArea())
-        .colorScheme(.dark)
-        #endif
-    }
-
-    private var content: some View {
-        VStack(spacing: 0) {
-            if let loadError = store.loadError {
-                HStack {
-                    Text(loadError)
-                        .font(.footnote)
-                        .foregroundStyle(.red)
-                    Spacer()
-                    Button("Retry") { Task { await store.refresh() } }
+        NavigationStack {
+            Group {
+                switch section {
+                case .blueprint: BlueprintView(store: store)
+                case .blinds: BlindsSectionView(store: store)
                 }
-                .padding()
             }
-
-            switch section {
-            case .blueprint: BlueprintView(store: store)
-            case .blinds: BlindsSectionView(store: store)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.black.ignoresSafeArea())
+            .safeAreaInset(edge: .top) {
+                if let loadError = store.loadError {
+                    LoadErrorBanner(message: loadError) {
+                        Task { await store.refresh() }
+                    }
+                }
             }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    #if os(iOS)
-    /// iOS has no room for the macOS sidebar, so the map/section picker collapses into
-    /// a single Store-style "..." glass button (top-trailing) with a checkmarked list
-    /// of sections inside -- new sections just need a new `Section` case, no UI changes.
-    private var sectionMenu: some View {
-        GlassEffectContainer {
-            HStack {
-                Spacer()
-                Menu {
-                    Picker("Section", selection: $section) {
+            .navigationTitle(section.title)
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                // Same segmented switcher on iPhone, iPad and Mac — the old macOS-only sidebar
+                // and iOS-only "…" menu are gone.
+                ToolbarItem(placement: .principal) {
+                    Picker("Section", selection: $section.animation(.snappy)) {
                         ForEach(Section.allCases, id: \.self) { item in
-                            Label(item.title, systemImage: item.icon).tag(item)
+                            Text(item.title).tag(item)
                         }
                     }
-                    .pickerStyle(.inline)
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(.white)
-                        .frame(width: 30, height: 30)
+                    .pickerStyle(.segmented)
+                    .fixedSize()
                 }
-                .menuIndicator(.hidden)
-                .buttonStyle(.glass)
-                .buttonBorderShape(.circle)
-                .accessibilityLabel("Change section")
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 14)
+            .errorAlert($store.commandError, title: "Command Failed")
         }
+        // The floor plan is thin white line art designed for a black background.
+        .preferredColorScheme(.dark)
     }
-    #endif
+}
 
-    /// Mirrors tphome's `Sidebar.vue`/`NavButton.vue`: dark panel (`#111113`), accent-colored icon
-    /// regardless of selection, active row highlighted with a `#1c1c1e` rounded pill and bold label.
-    private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(Section.allCases, id: \.self) { item in
-                Button {
-                    section = item
-                } label: {
-                    HStack(spacing: 16) {
-                        Image(systemName: item.icon)
-                            .font(.system(size: 18))
-                            .foregroundStyle(Self.accent)
-                            .frame(width: 20, height: 20)
-                        Text(item.title)
-                            .font(.system(size: 14, weight: section == item ? .bold : .medium))
-                            .foregroundStyle(.white)
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.vertical, 10)
-                    .padding(.horizontal, 16)
-                    .background(section == item ? Self.activePill : Color.clear, in: RoundedRectangle(cornerRadius: 8))
-                }
-                .buttonStyle(.plain)
-            }
+private struct LoadErrorBanner: View {
+    let message: String
+    let onRetry: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "wifi.exclamationmark")
+                .foregroundStyle(.orange)
+            Text(message)
+                .font(.footnote)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button("Retry", action: onRetry)
+                .buttonStyle(.glass)
         }
-        .padding(12)
-        .frame(width: 240, alignment: .leading)
-        .frame(maxHeight: .infinity, alignment: .top)
-        .background(Self.sidebarBackground)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .glassEffect(.regular, in: .rect(cornerRadius: 16))
+        .padding(.horizontal)
     }
 }

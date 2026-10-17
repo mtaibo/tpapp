@@ -85,7 +85,7 @@ public final class AdminStore: ObservableObject {
             } catch {
                 failures += 1
                 if failures >= 30 {
-                    errorMessage = "Se perdió el contacto con el despliegue: \(apiErrorMessage(error))"
+                    errorMessage = "Lost contact with the deploy: \(apiErrorMessage(error))"
                     return
                 }
             }

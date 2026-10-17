@@ -42,8 +42,8 @@ public final class PhotoSyncStore: ObservableObject {
 
     public var progressLabel: String {
         var label = "\(progressDone)/\(progressTotal)"
-        if progressFailed > 0 { label += " · \(progressFailed) con error" }
-        if excludedVideoCount > 0 { label += " · \(excludedVideoCount) vídeo(s) no incluidos" }
+        if progressFailed > 0 { label += " · \(progressFailed) failed" }
+        if excludedVideoCount > 0 { label += " · \(excludedVideoCount) video(s) skipped" }
         return label
     }
 
@@ -119,7 +119,7 @@ public final class PhotoSyncStore: ObservableObject {
 
         let status = await PhotoLibraryAuthorization.requestReadOnlyAccess()
         guard status == .authorized || status == .limited else {
-            lastError = "Sin acceso a la librería de fotos"
+            lastError = "No access to the photo library"
             permissionDenied = true
             return
         }
@@ -132,7 +132,7 @@ public final class PhotoSyncStore: ObservableObject {
         do {
             knownIds = try await PhotoBackupPlanner.checkKnownAssetIds(scan.images.map(\.localIdentifier), client: client)
         } catch {
-            lastError = "No se pudo comprobar qué fotos ya existen"
+            lastError = "Couldn't check which photos are already backed up"
             return
         }
 
@@ -179,7 +179,7 @@ public final class PhotoSyncStore: ObservableObject {
                     // through the rest of the library as individual failures.
                     if !sessionExpired {
                         sessionExpired = true
-                        lastError = "Tu sesión ha caducado, vuelve a iniciar sesión para continuar"
+                        lastError = "Your session expired. Sign in again to continue."
                     }
                 case .failure(let error):
                     // One bad asset shouldn't abort the whole run — it's retried on the next backupNow().
@@ -200,12 +200,12 @@ public final class PhotoSyncStore: ObservableObject {
         if stopRequested {
             // iOS (or the user, from the system progress UI) stopped the background run; what's
             // left isn't known to the server yet, so the next backupNow() picks it up.
-            lastError = "La copia se detuvo antes de terminar, se reanudará en el próximo backup"
+            lastError = "The backup stopped before finishing. It will resume on the next backup."
             return
         }
 
         if progressFailed > 0 {
-            lastError = "\(progressFailed) foto(s) no se pudieron subir, se reintentarán en el próximo backup"
+            lastError = "\(progressFailed) photo(s) couldn't be uploaded. They'll be retried on the next backup."
         }
         lastBackupAt = Date()
     }
@@ -233,7 +233,7 @@ public final class PhotoSyncStore: ObservableObject {
         do {
             let start = try await client.sanitize(dryRun: false)
             if start.alreadyRunning {
-                lastSanitizeMessage = "Ya había una reorganización en curso, esperando a que termine…"
+                lastSanitizeMessage = "A reorganization was already running. Waiting for it to finish…"
             }
 
             for _ in 0..<Self.sanitizePollMaxAttempts {
@@ -241,22 +241,22 @@ public final class PhotoSyncStore: ObservableObject {
                 let status = try await client.sanitizeStatus()
                 guard !status.running else { continue }
                 guard let report = status.lastReport else {
-                    lastError = "No se pudo reorganizar las fotos"
+                    lastError = "Couldn't reorganize the photos"
                     return
                 }
-                var message = "Reorganizadas \(report.moved), recuperadas \(report.recoveredOrphans), duplicados eliminados \(report.duplicatesRemoved)"
+                var message = "Moved \(report.moved), recovered \(report.recoveredOrphans), removed \(report.duplicatesRemoved) duplicate(s)"
                 if report.removedMissing > 0 {
-                    message += " · \(report.removedMissing) eliminada(s) por archivo no encontrado"
+                    message += " · \(report.removedMissing) removed because the file was missing"
                 }
                 if !report.errors.isEmpty {
-                    message += " · \(report.errors.count) error(es)"
+                    message += " · \(report.errors.count) error(s)"
                 }
                 lastSanitizeMessage = message
                 return
             }
-            lastError = "La reorganización sigue en curso en el servidor; vuelve a comprobarlo más tarde"
+            lastError = "The reorganization is still running on the server. Check back later."
         } catch {
-            lastError = "No se pudo reorganizar las fotos"
+            lastError = "Couldn't reorganize the photos"
         }
     }
 
@@ -279,14 +279,14 @@ public final class PhotoSyncStore: ObservableObject {
 
         let status = await PhotoLibraryAuthorization.requestReadOnlyAccess()
         guard status == .authorized || status == .limited else {
-            lastError = "Sin acceso a la librería de fotos"
+            lastError = "No access to the photo library"
             permissionDenied = true
             return
         }
 
         let scan = PhotoBackupPlanner.scanImageAssets()
         guard !scan.images.isEmpty else {
-            lastCheckMessage = "No hay fotos en la librería"
+            lastCheckMessage = "There are no photos in the library"
             return
         }
 
@@ -294,7 +294,7 @@ public final class PhotoSyncStore: ObservableObject {
         do {
             serverMetadata = try await fetchServerMetadata(scan.images.map(\.localIdentifier))
         } catch {
-            lastError = "No se pudo comprobar las fotos del servidor"
+            lastError = "Couldn't check the server's photos"
             return
         }
 
@@ -337,7 +337,7 @@ public final class PhotoSyncStore: ObservableObject {
                 case .failure(APIError.sessionExpired):
                     if !sessionExpired {
                         sessionExpired = true
-                        lastError = "Tu sesión ha caducado, vuelve a iniciar sesión para continuar"
+                        lastError = "Your session expired. Sign in again to continue."
                     }
                 case .failure:
                     uploadFailed += 1
@@ -358,10 +358,10 @@ public final class PhotoSyncStore: ObservableObject {
             await PhotoThumbnailCache.ensureThumbnail(for: asset, checksum: serverInfo.checksum)
         }
 
-        var message = "Comprobadas \(scan.images.count) fotos"
-        if uploaded > 0 { message += " · \(uploaded) subida(s)" }
-        if uploadFailed > 0 { message += " · \(uploadFailed) con error" }
-        if !mismatches.isEmpty { message += " · \(mismatches.count) con metadatos distintos" }
+        var message = "Checked \(scan.images.count) photos"
+        if uploaded > 0 { message += " · \(uploaded) uploaded" }
+        if uploadFailed > 0 { message += " · \(uploadFailed) failed" }
+        if !mismatches.isEmpty { message += " · \(mismatches.count) with different metadata" }
         lastCheckMessage = message
     }
 
@@ -370,15 +370,15 @@ public final class PhotoSyncStore: ObservableObject {
     /// device's `creationDate`, not because real drift is expected to be sub-second.
     private func describeMismatch(local: LightweightPhotoMetadata, server: PhotosClient.AssetMetadata) -> String? {
         var issues: [String] = []
-        if let serverWidth = server.width, local.width != serverWidth { issues.append("ancho") }
-        if let serverHeight = server.height, local.height != serverHeight { issues.append("alto") }
+        if let serverWidth = server.width, local.width != serverWidth { issues.append("width") }
+        if let serverHeight = server.height, local.height != serverHeight { issues.append("height") }
         if let localName = local.originalFilename, localName != server.originalFilename {
-            issues.append("nombre")
+            issues.append("name")
         }
         if let localTakenAt = local.takenAt {
             let serverTakenAt = server.takenAt.flatMap { ISO8601DateFormatter().date(from: $0) }
             if let serverTakenAt, abs(localTakenAt.timeIntervalSince(serverTakenAt)) > 5 {
-                issues.append("fecha")
+                issues.append("date")
             }
         }
         guard !issues.isEmpty else { return nil }
@@ -458,21 +458,21 @@ public final class PhotoSyncStore: ObservableObject {
     private static func failureReason(for error: Error) -> String {
         switch error {
         case PhotoMetadataExtractor.ExtractionError.timedOut:
-            return "iCloud tardó demasiado en descargar la foto"
+            return "iCloud took too long to download the photo"
         case PhotoMetadataExtractor.ExtractionError.noPhotoResource:
-            return "La foto no tiene un archivo original"
+            return "The photo has no original file"
         case APIError.transport:
-            return "Conexión cortada o sin red"
+            return "Connection dropped or offline"
         case APIError.server(422, _):
-            return "El archivo llegó dañado al servidor"
+            return "The file reached the server corrupted"
         case APIError.server(let status, _):
-            return "Error del servidor (\(status))"
+            return "Server error (\(status))"
         case APIError.decoding, APIError.invalidResponse:
-            return "Respuesta inesperada del servidor"
+            return "Unexpected server response"
         case let error as NSError where error.domain == PHPhotosErrorDomain || error.domain == "CloudPhotoLibraryErrorDomain":
-            return "No se pudo leer la foto de la fototeca/iCloud"
+            return "Couldn't read the photo from the library or iCloud"
         default:
-            return "Otro error: \((error as NSError).domain) \((error as NSError).code)"
+            return "Other error: \((error as NSError).domain) \((error as NSError).code)"
         }
     }
 }

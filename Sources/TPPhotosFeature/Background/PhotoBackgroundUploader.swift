@@ -50,7 +50,6 @@ public final class PhotoBackgroundUploader: NSObject, @unchecked Sendable {
         let config = URLSessionConfiguration.background(withIdentifier: Self.backgroundSessionIdentifier)
         config.isDiscretionary = false
         config.sessionSendsLaunchEvents = true
-        config.shouldUseExtendedBackgroundIdleMode = true
         return URLSession(configuration: config, delegate: self, delegateQueue: nil)
     }()
 
