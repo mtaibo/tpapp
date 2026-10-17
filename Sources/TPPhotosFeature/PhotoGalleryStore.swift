@@ -19,6 +19,7 @@ public final class PhotoGalleryStore: ObservableObject {
     private var hasMore = true
     private var generation = 0
     private var backgroundFetchTask: Task<Void, Never>?
+    private var thumbnailPrefetchTask: Task<Void, Never>?
 
     public init(client: PhotosClient) {
         self.client = client
@@ -30,6 +31,7 @@ public final class PhotoGalleryStore: ObservableObject {
         // drain may still be running; without this, a stale page from the old drain could land
         // after this reload has already reset nextCursor/hasMore/photos.
         backgroundFetchTask?.cancel()
+        thumbnailPrefetchTask?.cancel()
         generation += 1
         let myGeneration = generation
         let requestedFilter = filter
@@ -48,7 +50,10 @@ public final class PhotoGalleryStore: ObservableObject {
             if hasMore {
                 backgroundFetchTask = Task { [weak self] in
                     await self?.drainRemainingPages(generation: myGeneration)
+                    self?.startThumbnailPrefetch(generation: myGeneration)
                 }
+            } else {
+                startThumbnailPrefetch(generation: myGeneration)
             }
         } catch {
             guard myGeneration == generation else { return }
@@ -102,6 +107,18 @@ public final class PhotoGalleryStore: ObservableObject {
         } catch {
             guard myGeneration == generation else { return }
             errorMessage = apiErrorMessage(error)
+        }
+    }
+
+    /// Once the full list is in, fills the on-disk thumbnail cache for every photo that isn't on
+    /// this device, so later scrolling never waits on the server.
+    private func startThumbnailPrefetch(generation myGeneration: Int) {
+        guard myGeneration == generation, !hasMore else { return }
+        let photos = self.photos
+        let client = self.client
+        thumbnailPrefetchTask?.cancel()
+        thumbnailPrefetchTask = Task.detached(priority: .background) {
+            await PhotoThumbnailLoader.shared.prefetch(photos, client: client)
         }
     }
 

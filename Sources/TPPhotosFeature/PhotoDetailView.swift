@@ -155,8 +155,6 @@ private struct ZoomablePhoto: View {
                     .resizable()
                     .scaledToFit()
             } else {
-                // The grid already loaded this size, so it's normally in memory.
-                RemoteImage(url: client.thumbnailURL(for: photo, size: 400), contentMode: .fit)
                 ProgressView()
                     .tint(.white)
             }
@@ -185,7 +183,13 @@ private struct ZoomablePhoto: View {
             offset = .zero
         }
         .task(id: photo.id) {
-            original = await Self.loadOriginal(client.originalURL(for: photo))
+            // From this device's library when the photo is on it (instant, and no multi-megabyte
+            // download); from the server otherwise.
+            if let local = await PhotoThumbnailLoader.shared.localFullImage(for: photo, pixels: 3000) {
+                original = local
+            } else {
+                original = await Self.loadOriginal(client.originalURL(for: photo))
+            }
         }
         .accessibilityElement()
         .accessibilityLabel(photo.isScreenshot ? "Screenshot" : "Photo")
@@ -220,6 +224,7 @@ private struct ZoomablePhoto: View {
     /// Originals can be 12–48 MP; decoding them at full size for a phone screen wastes hundreds of
     /// megabytes, so they're downsampled off the main thread to roughly what can be displayed
     /// at max zoom. Not kept in `ImagePipeline`'s memory cache for the same reason.
+    @concurrent
     private static func loadOriginal(_ url: URL) async -> Image? {
         guard let (data, response) = try? await URLSession.shared.data(from: url),
               let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return nil }

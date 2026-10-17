@@ -44,18 +44,15 @@ struct PhotoGrid: View {
     /// often is what froze the whole app when entering Photos.
     @State private var visibleRows = VisibleRows()
     @State private var pinchConsumed = false
+    @State private var containerWidth: CGFloat = 400
+    @Environment(\.displayScale) private var displayScale
 
     private var columns: Int { PhotoGridDensity.columns(forLevel: columnLevel) }
     private var spacing: CGFloat { columns >= 9 ? 1 : 2 }
 
-    /// Bigger thumbnails as tiles grow, so zooming in doesn't just blow up a blurry one.
-    private var thumbnailSize: Int {
-        switch columns {
-        case 1: return 800
-        case 3: return 400
-        case 5: return 240
-        default: return 120
-        }
+    /// The tile's real size in pixels, so each zoom level asks for just enough resolution.
+    private var tilePixels: Int {
+        Int((containerWidth / CGFloat(columns)) * displayScale)
     }
 
     var body: some View {
@@ -77,6 +74,7 @@ struct PhotoGrid: View {
                 ProgressView().padding()
             }
         }
+        .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { containerWidth = $0 }
         .scrollPosition($scrollPosition)
         // Open on the newest photos, and keep the view still while older rows are added above.
         .defaultScrollAnchor(.bottom)
@@ -111,11 +109,7 @@ struct PhotoGrid: View {
             Color.clear
                 .aspectRatio(1, contentMode: .fit)
                 .overlay {
-                    RemoteImage(
-                        url: client.thumbnailURL(for: photo, size: thumbnailSize),
-                        // The on-device cache holds small thumbnails only; bigger tiles fetch.
-                        localFile: thumbnailSize <= 400 ? PhotoThumbnailCache.fileURL(forChecksum: photo.checksum) : nil
-                    )
+                    PhotoThumbnail(photo: photo, pixelSize: tilePixels, client: client)
                 }
                 .clipShape(.rect(cornerRadius: columns >= 9 ? 0 : 4))
                 .contentShape(.rect)
