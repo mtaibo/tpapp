@@ -2,11 +2,9 @@
 import UIKit
 
 /// Hosts the grid, with no blur or band behind the navigation bar: photos run straight up under
-/// it. Also reports when the grid leaves the screen.
+/// it.
 final class PhotoGridContainerView: UIView {
     let collectionView: PhotoGridCollectionView
-    /// Called when the grid leaves the screen (another tab is picked).
-    var onLeaveWindow: () -> Void = {}
 
     init(collectionView: PhotoGridCollectionView) {
         self.collectionView = collectionView
@@ -24,11 +22,6 @@ final class PhotoGridContainerView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         collectionView.frame = bounds
-    }
-
-    override func didMoveToWindow() {
-        super.didMoveToWindow()
-        if window == nil { onLeaveWindow() }
     }
 }
 #endif

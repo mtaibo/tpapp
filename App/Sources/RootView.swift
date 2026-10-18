@@ -105,7 +105,9 @@ struct RootView: View {
         #if os(iOS)
         // The system's own shrinking tab bar (what the Photos app does while scrolling). It
         // replaces a hand-made one that hid the real bar and floated a copy over the content.
-        .tabBarMinimizeBehavior(.onScrollDown)
+        // Photos keeps its newest photos at the bottom, so there scrolling up (into older photos)
+        // tucks the bar away and scrolling back down brings it back.
+        .tabBarMinimizeBehavior(selectedTab == .photos ? .onScrollUp : .onScrollDown)
         #endif
     }
 
