@@ -11,7 +11,6 @@ final class PhotoGridCell: UICollectionViewCell {
     private(set) var photo: Photo?
     private var pixels = 0
     private var ticket: PhotoThumbnailLoader.Ticket?
-    private var loadTask: Task<Void, Never>?
     private weak var loader: PhotoThumbnailLoader?
 
     override init(frame: CGRect) {
@@ -51,23 +50,20 @@ final class PhotoGridCell: UICollectionViewCell {
         self.pixels = pixels
         self.loader = loader
 
-        if let cached = PhotoThumbnailCache.cachedCGImage(forChecksum: photo.checksum, pixels: pixels) {
+        if let cached = PhotoThumbnailCache.cachedCGImage(forChecksum: photo.checksum, pixels: pixels)
+            ?? PhotoThumbnailCache.tableCGImage(forChecksum: photo.checksum, pixels: pixels) {
             imageView.image = UIImage(cgImage: cached)
             return
         }
-        // Keep (or borrow) another size of the same photo while the right one decodes, so a zoom
-        // step never blanks the tiles already on screen.
+        // Show what's at hand straight away — the table's 128px copy, or another decoded size —
+        // while the sharp one decodes, so neither a big tile nor a zoom step is ever blank.
         if !samePhoto {
             imageView.image = PhotoThumbnailCache.anyCachedCGImage(forChecksum: photo.checksum).map(UIImage.init(cgImage:))
         }
-        let ticket = loader.request(photo, pixels: pixels)
-        self.ticket = ticket
-        loadTask = Task { [weak self] in
-            let image = await ticket.task.value
-            guard let self, !Task.isCancelled, let image, self.photo?.checksum == photo.checksum else { return }
-            self.imageView.image = UIImage(cgImage: image)
-            self.loader?.release(ticket)
+        ticket = loader.request(photo, pixels: pixels, priority: .visible) { [weak self] image in
+            guard let self, self.photo?.checksum == photo.checksum else { return }
             self.ticket = nil
+            if let image { self.imageView.image = UIImage(cgImage: image) }
         }
     }
 
@@ -81,8 +77,6 @@ final class PhotoGridCell: UICollectionViewCell {
     }
 
     private func cancelLoad() {
-        loadTask?.cancel()
-        loadTask = nil
         if let ticket { loader?.release(ticket) }
         ticket = nil
     }

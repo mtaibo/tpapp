@@ -8,7 +8,7 @@ import UIKit
 /// Three rounds of tuning a SwiftUI `LazyVStack` still left it hitching: SwiftUI diffs the whole
 /// row list whenever anything the grid reads changes, builds and lays out tiles as SwiftUI views,
 /// and estimates the heights of rows it hasn't drawn. Here tiles are reused cells, frames are
-/// arithmetic (`PhotoGridLayout`), thumbnails are fetched ahead of the scroll by the prefetcher,
+/// arithmetic (`PhotoGridLayout`), thumbnails are loaded ahead of the scroll (see `updateLookahead`),
 /// and SwiftUI is not involved at all while scrolling.
 struct PhotoCollectionGrid: UIViewRepresentable {
     /// Newest first, as the server pages them; shown oldest at the top.
@@ -34,7 +34,6 @@ struct PhotoCollectionGrid: UIViewRepresentable {
         collectionView.register(PhotoGridCell.self, forCellWithReuseIdentifier: PhotoGridCell.reuseIdentifier)
         collectionView.dataSource = coordinator
         collectionView.delegate = coordinator
-        collectionView.prefetchDataSource = coordinator
         collectionView.isPrefetchingEnabled = true
 
         let pinch = UIPinchGestureRecognizer(target: coordinator.zoom, action: #selector(PhotoGridZoomController.handlePinch(_:)))
@@ -43,6 +42,7 @@ struct PhotoCollectionGrid: UIViewRepresentable {
 
         coordinator.collectionView = collectionView
         coordinator.zoom.collectionView = collectionView
+        collectionView.isGridZooming = { [weak zoom = coordinator.zoom] in zoom?.isZooming ?? false }
         coordinator.columns = columns
         coordinator.photos = photos
         coordinator.scrollToBottomSignal = scrollToBottomSignal
@@ -69,7 +69,7 @@ struct PhotoCollectionGrid: UIViewRepresentable {
     }
 
     @MainActor
-    final class Coordinator: NSObject, UICollectionViewDataSource, UICollectionViewDelegate, UICollectionViewDataSourcePrefetching, UIGestureRecognizerDelegate {
+    final class Coordinator: NSObject, UICollectionViewDataSource, UICollectionViewDelegate, UIGestureRecognizerDelegate {
         /// Newest first; item `i` is `photos[photos.count - 1 - i]`.
         var photos: [Photo] = []
         var columns: Int
@@ -79,7 +79,10 @@ struct PhotoCollectionGrid: UIViewRepresentable {
         weak var collectionView: PhotoGridCollectionView?
 
         private let loader: PhotoThumbnailLoader
-        private var prefetches: [IndexPath: PhotoThumbnailLoader.Ticket] = [:]
+        /// Loads for tiles just ahead of the scroll, by item.
+        private var lookahead: [Int: PhotoThumbnailLoader.Ticket] = [:]
+        private var lookaheadKey: (bucket: Int, direction: Int)?
+        private var lastLookaheadY: CGFloat = 0
         let zoom: PhotoGridZoomController
         /// A sync that landed mid-zoom; reloading would pull the items out from under it.
         private var pendingPhotos: [Photo]?
@@ -127,7 +130,7 @@ struct PhotoCollectionGrid: UIViewRepresentable {
             }
             let distanceFromBottom = collectionView.contentSize.height - collectionView.contentOffset.y
             photos = newPhotos
-            releasePrefetches()
+            releaseLookahead()
             collectionView.reloadData()
             guard !collectionView.isPinnedToBottom else { return }
             collectionView.layoutIfNeeded()
@@ -170,35 +173,67 @@ struct PhotoCollectionGrid: UIViewRepresentable {
             }
         }
 
-        // MARK: Prefetching
+        // MARK: Look-ahead
 
-        func collectionView(_ collectionView: UICollectionView, prefetchItemsAt indexPaths: [IndexPath]) {
-            let pixels = self.pixels
-            for indexPath in indexPaths where indexPath.item < photos.count && prefetches[indexPath] == nil {
-                let photo = photo(at: indexPath.item)
-                guard PhotoThumbnailCache.cachedCGImage(forChecksum: photo.checksum, pixels: pixels) == nil else { continue }
-                prefetches[indexPath] = loader.request(photo, pixels: pixels)
+        /// Loads the thumbnails about a screen and a half ahead in the direction of the scroll, at
+        /// lower priority than the tiles on screen, so a fling lands on tiles that are already
+        /// decoded. UIKit's own prefetching looks only a row or two ahead, which a fast fling
+        /// outruns. Recomputed every quarter screen, not every frame.
+        private func updateLookahead(in collectionView: UICollectionView) {
+            let y = collectionView.contentOffset.y
+            let delta = y - lastLookaheadY
+            lastLookaheadY = y
+            guard delta != 0, !zoom.isZooming, collectionView.bounds.height > 0 else { return }
+            let height = collectionView.bounds.height
+            let direction = delta > 0 ? 1 : -1
+            let key = (bucket: Int((y / (height / 4)).rounded(.down)), direction: direction)
+            guard lookaheadKey?.bucket != key.bucket || lookaheadKey?.direction != key.direction else { return }
+            lookaheadKey = key
+
+            let bounds = collectionView.bounds
+            let window = direction > 0
+                ? CGRect(x: bounds.minX, y: bounds.maxY, width: bounds.width, height: height * 1.5)
+                : CGRect(x: bounds.minX, y: bounds.minY - height * 1.5, width: bounds.width, height: height * 1.5)
+            let items = Set((collectionView.collectionViewLayout.layoutAttributesForElements(in: window) ?? []).map(\.indexPath.item))
+
+            for (item, ticket) in lookahead where !items.contains(item) {
+                loader.release(ticket)
+                lookahead[item] = nil
             }
-        }
-
-        func collectionView(_ collectionView: UICollectionView, cancelPrefetchingForItemsAt indexPaths: [IndexPath]) {
-            for indexPath in indexPaths {
-                if let ticket = prefetches.removeValue(forKey: indexPath) { loader.release(ticket) }
+            let pixels = self.pixels
+            for item in items where lookahead[item] == nil && item < photos.count {
+                let photo = photo(at: item)
+                guard PhotoThumbnailCache.cachedCGImage(forChecksum: photo.checksum, pixels: pixels) == nil,
+                      pixels > PhotoThumbnailTable.side || !PhotoThumbnailTable.shared.contains(photo.checksum) else { continue }
+                lookahead[item] = loader.request(photo, pixels: pixels, priority: .lookahead) { _ in }
             }
         }
 
         func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
             // The cell holds its own claim now.
-            if let ticket = prefetches.removeValue(forKey: indexPath) { loader.release(ticket) }
+            if let ticket = lookahead.removeValue(forKey: indexPath.item) { loader.release(ticket) }
         }
 
-        private func releasePrefetches() {
-            for ticket in prefetches.values { loader.release(ticket) }
-            prefetches.removeAll()
+        private func releaseLookahead() {
+            for ticket in lookahead.values { loader.release(ticket) }
+            lookahead.removeAll()
+            lookaheadKey = nil
+        }
+
+        func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            if let collectionView = scrollView as? UICollectionView { updateLookahead(in: collectionView) }
         }
 
         func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
             collectionView?.isPinnedToBottom = false
+        }
+
+        func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+            if !decelerate { collectionView?.scrollCameToRest() }
+        }
+
+        func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+            collectionView?.scrollCameToRest()
         }
 
         // MARK: Zoom
@@ -215,7 +250,7 @@ struct PhotoCollectionGrid: UIViewRepresentable {
         private func levelCommitted(_ level: Int) {
             guard let collectionView else { return }
             columns = PhotoGridDensity.columns(forLevel: level)
-            releasePrefetches()
+            releaseLookahead()
             // Cells already on screen switch to the new corner radius and thumbnail size.
             let pixels = self.pixels
             for case let cell as PhotoGridCell in collectionView.visibleCells {
@@ -273,6 +308,45 @@ struct PhotoCollectionGrid: UIViewRepresentable {
 /// and the first sync landing — until the user first scrolls.
 final class PhotoGridCollectionView: UICollectionView {
     var isPinnedToBottom = true
+    /// A zoom owns the offset while it runs.
+    var isGridZooming: () -> Bool = { false }
+
+    private var lastInsets: UIEdgeInsets?
+    /// An inset change that landed mid-scroll, to settle once the scroll comes to rest.
+    private var pendingBottomFix: CGFloat?
+
+    private func maxOffsetY(for insets: UIEdgeInsets) -> CGFloat {
+        max(contentSize.height + insets.bottom - bounds.height, -insets.top)
+    }
+
+    /// The tab bar can change the bottom inset as it minimizes and restores. UIKit keeps the
+    /// offset where it was, so a grid sitting on its newest photos either slid behind the bar or
+    /// left a gap under the last row — until switching tabs re-laid it out. Keep it on its
+    /// bottom edge instead, and never leave blank space below the last row.
+    override func adjustedContentInsetDidChange() {
+        super.adjustedContentInsetDidChange()
+        let insets = adjustedContentInset
+        defer { lastInsets = insets }
+        guard let old = lastInsets, old != insets, contentSize.height > 0, bounds.height > 0 else { return }
+        let wasAtBottom = contentOffset.y >= maxOffsetY(for: old) - 1
+        if isTracking || isDecelerating || isGridZooming() {
+            if wasAtBottom { pendingBottomFix = abs(insets.bottom - old.bottom) + 1 }
+            return
+        }
+        let maxY = maxOffsetY(for: insets)
+        if wasAtBottom || contentOffset.y > maxY { contentOffset.y = maxY }
+    }
+
+    /// After a drag or fling ends: applies an inset change that happened during it.
+    func scrollCameToRest() {
+        defer { pendingBottomFix = nil }
+        guard !isGridZooming(), contentSize.height > 0 else { return }
+        let maxY = maxOffsetY(for: adjustedContentInset)
+        let tolerance = pendingBottomFix ?? 0.5
+        if contentOffset.y > maxY || (pendingBottomFix != nil && abs(contentOffset.y - maxY) <= tolerance) {
+            setContentOffset(CGPoint(x: contentOffset.x, y: maxY), animated: true)
+        }
+    }
 
     override func layoutSubviews() {
         super.layoutSubviews()

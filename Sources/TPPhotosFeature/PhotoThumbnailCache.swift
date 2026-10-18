@@ -57,6 +57,9 @@ public enum PhotoThumbnailCache {
         return cache
     }()
 
+    /// Where the thumbnails (and `PhotoThumbnailTable`'s files) live.
+    static var directoryURL: URL { directory }
+
     static func fileURL(forChecksum checksum: String) -> URL {
         directory.appendingPathComponent("\(checksum).jpg")
     }
@@ -82,11 +85,50 @@ public enum PhotoThumbnailCache {
         memory.object(forKey: memoryKey(checksum, pixels))?.image
     }
 
-    /// Any size already decoded, to show something sharp-enough while the right size decodes.
+    /// Any size already decoded — or the ready-made one in the table — to show straight away
+    /// while the right size decodes.
     static func anyCachedCGImage(forChecksum checksum: String) -> CGImage? {
         cachedCGImage(forChecksum: checksum, pixels: pixelSize)
             ?? cachedCGImage(forChecksum: checksum, pixels: 128)
             ?? cachedCGImage(forChecksum: checksum, pixels: 64)
+            ?? PhotoThumbnailTable.shared.image(forChecksum: checksum)
+    }
+
+    /// The table's ready-to-draw copy, for tiles no bigger than it (`pixels` ≤ 128): enough on
+    /// its own, since the GPU scales it down for smaller tiles at no cost.
+    static func tableCGImage(forChecksum checksum: String, pixels: Int) -> CGImage? {
+        guard pixels <= PhotoThumbnailTable.side else { return nil }
+        return PhotoThumbnailTable.shared.image(forChecksum: checksum)
+    }
+
+    /// Fills the table from the thumbnails already stored on this device that aren't in it yet,
+    /// newest first (where the grid opens), a couple at a time in the background. One-time work
+    /// per photo; after it, dense grids never decode anything.
+    @concurrent
+    static func fillTable(_ photos: [Photo]) async {
+        let table = PhotoThumbnailTable.shared
+        let pending = photos.filter { !table.contains($0.checksum) }
+        guard !pending.isEmpty else { return }
+        await withTaskGroup(of: Void.self) { group in
+            var iterator = pending.makeIterator()
+            func addNext() {
+                guard let photo = iterator.next() else { return }
+                group.addTask(priority: .utility) {
+                    let url = fileURL(forChecksum: photo.checksum)
+                    if FileManager.default.fileExists(atPath: url.path) {
+                        table.insert(checksum: photo.checksum, fileURL: url)
+                    }
+                }
+            }
+            for _ in 0..<2 { addNext() }
+            for await _ in group {
+                if Task.isCancelled {
+                    group.cancelAll()
+                    return
+                }
+                addNext()
+            }
+        }
     }
 
     static func cachedImage(for photo: Photo) -> Image? {
@@ -97,15 +139,35 @@ public enum PhotoThumbnailCache {
     /// and kept. Runs in the caller's task, so a tile that scrolls away cancels its download.
     @concurrent
     static func cgImage(for photo: Photo, pixels: Int, client: PhotosClient) async -> CGImage? {
+        if let image = storedCGImage(for: photo, pixels: pixels) { return image }
+        guard !Task.isCancelled else { return nil }
+        return await downloadedCGImage(for: photo, pixels: pixels, client: client)
+    }
+
+    /// The memory cache, else the copy stored on this device decoded now; `nil` if there's no
+    /// stored copy yet. Synchronous file I/O and decoding: call it off the main thread.
+    nonisolated static func storedCGImage(for photo: Photo, pixels: Int) -> CGImage? {
         if let cached = cachedCGImage(forChecksum: photo.checksum, pixels: pixels) { return cached }
         let url = fileURL(forChecksum: photo.checksum)
-        var image = decode(CGImageSourceCreateWithURL(url as CFURL, nil), pixels: pixels)
-        if image == nil, !Task.isCancelled, let data = await download(photo, client: client) {
-            image = decode(CGImageSourceCreateWithData(data as CFData, nil), pixels: pixels)
-        }
-        guard let image else { return nil }
-        memory.setObject(ImageBox(image), forKey: memoryKey(photo.checksum, pixels), cost: image.bytesPerRow * image.height)
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let image = decode(source, pixels: pixels) else { return nil }
+        remember(image, for: photo, pixels: pixels)
+        // Next time this photo is shown it comes straight from the table.
+        PhotoThumbnailTable.shared.insert(checksum: photo.checksum, from: source)
         return image
+    }
+
+    /// Downloads the thumbnail (keeping it on disk for next time) and decodes it.
+    @concurrent
+    static func downloadedCGImage(for photo: Photo, pixels: Int, client: PhotosClient) async -> CGImage? {
+        guard let data = await download(photo, client: client),
+              let image = decode(CGImageSourceCreateWithData(data as CFData, nil), pixels: pixels) else { return nil }
+        remember(image, for: photo, pixels: pixels)
+        return image
+    }
+
+    private static func remember(_ image: CGImage, for photo: Photo, pixels: Int) {
+        memory.setObject(ImageBox(image), forKey: memoryKey(photo.checksum, pixels), cost: image.bytesPerRow * image.height)
     }
 
     @concurrent
@@ -114,7 +176,9 @@ public enum PhotoThumbnailCache {
     }
 
     /// Decodes right here, off the main thread, into a bitmap ready to draw — never lazily on
-    /// the first frame it's shown, which is what makes a grid hitch.
+    /// the first frame it's shown, which is what makes a grid hitch. On iOS it's also converted to
+    /// the screen's own pixel format; otherwise Core Animation converts it on the main thread the
+    /// first time the tile draws, which showed up as hitches while flinging through new photos.
     private static func decode(_ source: CGImageSource?, pixels: Int) -> CGImage? {
         guard let source else { return nil }
         let options: [CFString: Any] = [
@@ -123,7 +187,12 @@ public enum PhotoThumbnailCache {
             kCGImageSourceShouldCacheImmediately: true,
             kCGImageSourceThumbnailMaxPixelSize: pixels,
         ]
-        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+        #if os(iOS)
+        return UIImage(cgImage: image).preparingForDisplay()?.cgImage ?? image
+        #else
+        return image
+        #endif
     }
 
     /// Downloads the thumbnail of every photo that doesn't have one on this device yet, newest
@@ -136,7 +205,9 @@ public enum PhotoThumbnailCache {
             var iterator = missing.makeIterator()
             func addNext() {
                 guard let photo = iterator.next() else { return }
-                group.addTask(priority: .background) {
+                // Utility rather than background: iOS throttles background-priority network and
+                // disk work hard, which left big libraries without thumbnails for a long time.
+                group.addTask(priority: .utility) {
                     _ = await download(photo, client: client)
                 }
             }
@@ -158,6 +229,7 @@ public enum PhotoThumbnailCache {
               let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
               !data.isEmpty else { return nil }
         try? data.write(to: fileURL(forChecksum: photo.checksum), options: .atomic)
+        PhotoThumbnailTable.shared.insert(checksum: photo.checksum, data: data)
         return data
     }
 
@@ -185,6 +257,10 @@ public enum PhotoThumbnailCache {
                 guard once.claim() else { return }
                 if let platformImage, let data = jpegData(from: platformImage) {
                     try? data.write(to: fileURL(forChecksum: checksum), options: .atomic)
+                    // PhotoKit can call back on the main thread; decode for the table elsewhere.
+                    DispatchQueue.global(qos: .utility).async {
+                        PhotoThumbnailTable.shared.insert(checksum: checksum, data: data)
+                    }
                 }
                 continuation.resume()
             }

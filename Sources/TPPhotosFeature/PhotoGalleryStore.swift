@@ -29,6 +29,7 @@ public final class PhotoGalleryStore: ObservableObject {
     private let client: PhotosClient
     private var generation = 0
     private var thumbnailTask: Task<Void, Never>?
+    private var tableTask: Task<Void, Never>?
     /// The server's maximum page size.
     private static let pageSize = 200
 
@@ -46,7 +47,10 @@ public final class PhotoGalleryStore: ObservableObject {
             // Off the main thread: a big library's list is several megabytes of JSON.
             let cached = await Task.detached(priority: .userInitiated) { PhotoIndexCache.load(filter: requestedFilter) }.value
             guard myGeneration == generation else { return }
-            if let cached { photos = cached }
+            if let cached {
+                photos = cached
+                fillThumbnailTable(cached)
+            }
         }
         isLoading = photos.isEmpty
         isSyncing = true
@@ -81,9 +85,19 @@ public final class PhotoGalleryStore: ObservableObject {
         if all != photos { photos = all }
         Task.detached(priority: .utility) { PhotoIndexCache.save(all, filter: requestedFilter) }
 
+        fillThumbnailTable(all)
         let client = self.client
-        thumbnailTask = Task.detached(priority: .background) {
+        thumbnailTask = Task.detached(priority: .utility) {
             await PhotoThumbnailCache.downloadMissing(all, client: client)
+        }
+    }
+
+    /// Converts stored thumbnails into the grid's ready-to-draw table — started as soon as a list
+    /// is on screen, not after a sync that may never come back (offline, server unreachable).
+    private func fillThumbnailTable(_ photos: [Photo]) {
+        tableTask?.cancel()
+        tableTask = Task.detached(priority: .utility) {
+            await PhotoThumbnailCache.fillTable(photos)
         }
     }
 
