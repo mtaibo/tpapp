@@ -65,10 +65,12 @@ public enum PhotoThumbnailCache {
         FileManager.default.fileExists(atPath: fileURL(forChecksum: checksum).path)
     }
 
-    /// The decoded size for a tile `points` wide: dense grids get a 128px bitmap, a quarter of the
-    /// memory and decode time of the stored 256px file, since their tiles are tiny anyway.
+    /// The decoded size for a tile `points` wide: dense grids get a 128px bitmap (a quarter of the
+    /// memory and decode time of the stored 256px file) and the densest a 64px one, since their
+    /// tiles are tiny anyway — 31 columns puts some 2,000 tiles on screen at once.
     static func pixelSize(forTile points: CGFloat, scale: CGFloat) -> Int {
-        points * scale <= 140 ? 128 : pixelSize
+        let pixels = points * scale
+        return pixels <= 70 ? 64 : pixels <= 140 ? 128 : pixelSize
     }
 
     private static func memoryKey(_ checksum: String, _ pixels: Int) -> NSString {
@@ -82,7 +84,9 @@ public enum PhotoThumbnailCache {
 
     /// Any size already decoded, to show something sharp-enough while the right size decodes.
     static func anyCachedCGImage(forChecksum checksum: String) -> CGImage? {
-        cachedCGImage(forChecksum: checksum, pixels: pixelSize) ?? cachedCGImage(forChecksum: checksum, pixels: 128)
+        cachedCGImage(forChecksum: checksum, pixels: pixelSize)
+            ?? cachedCGImage(forChecksum: checksum, pixels: 128)
+            ?? cachedCGImage(forChecksum: checksum, pixels: 64)
     }
 
     static func cachedImage(for photo: Photo) -> Image? {

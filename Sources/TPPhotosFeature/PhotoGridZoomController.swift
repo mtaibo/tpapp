@@ -163,18 +163,29 @@ final class PhotoGridZoomController: NSObject {
 
     /// Animates to `newLevel` around the middle of the screen, as if pinched there.
     func zoom(toLevel newLevel: Int) {
+        guard let collectionView else { return }
+        let insets = collectionView.adjustedContentInset
+        let middle = CGPoint(
+            x: collectionView.contentOffset.x + collectionView.bounds.width / 2,
+            y: collectionView.contentOffset.y + insets.top + (collectionView.bounds.height - insets.top - insets.bottom) / 2
+        )
+        zoom(toLevel: newLevel, around: middle)
+    }
+
+    /// Animates to `newLevel` — any number of levels away, in one smooth step — around a point in
+    /// content coordinates (a tapped photo), keeping that photo's row where it is on screen.
+    func zoom(toLevel newLevel: Int, around point: CGPoint, duration: CFTimeInterval? = nil) {
         guard let collectionView, newLevel != level, Self.levels.indices.contains(newLevel), !isPinching else { return }
         completeSettleNow()
         collectionView.isPinnedToBottom = false
-        let insets = collectionView.adjustedContentInset
-        finger = CGPoint(x: collectionView.bounds.width / 2, y: insets.top + (collectionView.bounds.height - insets.top - insets.bottom) / 2)
-        setFocus(at: CGPoint(x: collectionView.contentOffset.x + finger.x, y: collectionView.contentOffset.y + finger.y))
-        guard abs(newLevel - level) == 1, !UIAccessibility.isReduceMotionEnabled else {
+        finger = CGPoint(x: point.x - collectionView.contentOffset.x, y: point.y - collectionView.contentOffset.y)
+        setFocus(at: point)
+        guard !UIAccessibility.isReduceMotionEnabled else {
             jump(to: newLevel)
             return
         }
         startSession(to: newLevel)
-        settle(to: 1)
+        settle(to: 1, duration: duration)
     }
 
     // MARK: Sessions
@@ -320,11 +331,11 @@ final class PhotoGridZoomController: NSObject {
 
     // MARK: Settling after the fingers lift
 
-    private func settle(to toProgress: CGFloat) {
+    private func settle(to toProgress: CGFloat, duration: CFTimeInterval? = nil) {
         guard let session else { return }
         settle = Settle(
             start: CACurrentMediaTime(),
-            duration: 0.2 + 0.15 * Double(abs(toProgress - session.progress)),
+            duration: duration ?? 0.2 + 0.15 * Double(abs(toProgress - session.progress)),
             fromProgress: session.progress,
             toProgress: toProgress
         )

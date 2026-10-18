@@ -8,12 +8,23 @@ import UIKit
 /// The photo grid's density levels. One pinch steps one level, like the native Photos app.
 /// No single-column level: tiles only ever show the small on-device thumbnail, which would look
 /// blurry stretched to the full width — opening a photo is how to see it large.
+/// Every count is odd, so zooming about the middle column keeps the columns of any two levels
+/// lined up (see `PhotoGridZoomController`).
 enum PhotoGridDensity {
-    static let columnLevels = [3, 5, 9, 15]
+    static let columnLevels = [3, 5, 9, 15, 31]
     static let storageKey = "photos.columnLevel.v2"
 
     static func columns(forLevel level: Int) -> Int {
         columnLevels[min(max(level, 0), columnLevels.count - 1)]
+    }
+
+    /// Where tapping a photo zooms to instead of opening it: dense grids are for finding a spot,
+    /// so a tap closes in on it — the densest level to 15 columns, anything denser than 5 to 5 —
+    /// and photos open from 5 columns or fewer. `nil` means open the photo.
+    static func tapZoomLevel(fromLevel level: Int) -> Int? {
+        let columns = columns(forLevel: level)
+        let target = columns > 15 ? 15 : columns > 5 ? 5 : nil
+        return target.flatMap { columnLevels.firstIndex(of: $0) }
     }
 }
 

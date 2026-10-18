@@ -159,7 +159,15 @@ struct PhotoCollectionGrid: UIViewRepresentable {
 
         func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
             collectionView.deselectItem(at: indexPath, animated: false)
-            onSelect(photo(at: indexPath.item))
+            guard !zoom.isZooming else { return }
+            // In the dense grids a tap closes in on the photo (31 → 15 → 5 columns) instead of
+            // opening it; photos open from 5 columns or fewer.
+            if let target = PhotoGridDensity.tapZoomLevel(fromLevel: zoom.level),
+               let frame = collectionView.layoutAttributesForItem(at: indexPath)?.frame {
+                zoom.zoom(toLevel: target, around: CGPoint(x: frame.midX, y: frame.midY), duration: 0.45)
+            } else {
+                onSelect(photo(at: indexPath.item))
+            }
         }
 
         // MARK: Prefetching
