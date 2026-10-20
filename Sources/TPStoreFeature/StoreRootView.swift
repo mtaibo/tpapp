@@ -33,44 +33,42 @@ struct StoreFolder: Hashable {
 /// The Store tab: a Files-style stack that opens straight into the user's Home folder, with a
 /// "Browse" level above it for Shared, favorites and (for admins) the raw disk and system roots.
 /// Shared lives here now instead of in its own tab.
+///
+/// Re-tapping the Store tab is left to the system, which pops the stack to Browse like the Files
+/// app does. This used to also push Home back on top in the same tap, and that push racing the
+/// system's own pop could leave the stack with nothing on screen — a black page.
 public struct StoreRootView: View {
     let storeClient: StoreClient
     let rootPath: String
     let isAdmin: Bool
-    let resetSignal: Int
 
     @StateObject private var favorites = StoreFavoritesStore()
+    @State private var cache: StoreDirectoryCache
     @State private var path: [StoreFolder]
 
-    public init(storeClient: StoreClient, rootPath: String, isAdmin: Bool = false, resetSignal: Int = 0) {
+    public init(storeClient: StoreClient, rootPath: String, isAdmin: Bool = false) {
         self.storeClient = storeClient
         self.rootPath = rootPath
         self.isAdmin = isAdmin
-        self.resetSignal = resetSignal
+        _cache = State(initialValue: StoreDirectoryCache(storeClient: storeClient))
         _path = State(initialValue: [.home(rootPath)])
     }
 
     public var body: some View {
         NavigationStack(path: $path) {
-            StoreBrowseView(storeClient: storeClient, rootPath: rootPath, isAdmin: isAdmin, favorites: favorites)
+            StoreBrowseView(rootPath: rootPath, isAdmin: isAdmin, cache: cache, favorites: favorites)
                 .navigationDestination(for: StoreFolder.self) { folder in
-                    FolderView(folder: folder, storeClient: storeClient, favorites: favorites)
+                    FolderView(folder: folder, storeClient: storeClient, cache: cache, favorites: favorites)
                 }
-        }
-        // Re-tapping the Store tab goes back to Home, wherever the stack currently is.
-        .onChange(of: resetSignal) {
-            path = [.home(rootPath)]
         }
     }
 }
 
 struct StoreBrowseView: View {
-    let storeClient: StoreClient
     let rootPath: String
     let isAdmin: Bool
+    let cache: StoreDirectoryCache
     @ObservedObject var favorites: StoreFavoritesStore
-
-    @State private var disk: DiskInfo?
 
     var body: some View {
         List {
@@ -116,7 +114,7 @@ struct StoreBrowseView: View {
                 }
             }
 
-            if let disk {
+            if let disk = cache.disk {
                 Section("Storage") {
                     VStack(alignment: .leading, spacing: 8) {
                         ProgressView(value: Double(disk.used), total: Double(max(disk.total, 1)))
@@ -131,7 +129,7 @@ struct StoreBrowseView: View {
         }
         .navigationTitle("Store")
         .task {
-            disk = try? await storeClient.diskInfo()
+            await cache.refreshDisk()
         }
         #if os(macOS)
         .frame(minWidth: 640, minHeight: 480)

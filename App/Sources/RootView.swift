@@ -24,7 +24,6 @@ struct RootView: View {
     let adminStore: AdminStore
 
     @State private var selectedTab: AppTab = .store
-    @State private var storeResetSignal = 0
     @State private var moreResetSignal = 0
     @State private var photosScrollSignal = 0
 
@@ -73,8 +72,7 @@ struct RootView: View {
                 StoreRootView(
                     storeClient: storeClient,
                     rootPath: "users/\(profile.email)",
-                    isAdmin: profile.isAdmin,
-                    resetSignal: storeResetSignal
+                    isAdmin: profile.isAdmin
                 )
             }
             Tab("Photos", systemImage: "photo.on.rectangle", value: AppTab.photos) {
@@ -118,11 +116,11 @@ struct RootView: View {
             set: { newValue in
                 if newValue == selectedTab {
                     switch newValue {
-                    case .store: storeResetSignal += 1
                     case .more: moreResetSignal += 1
                     // Photos keeps its newest photos at the bottom, so "back to the start" is down.
                     case .photos: photosScrollSignal += 1
-                    case .home: break
+                    // Store pops itself back to Browse; resetting it here too raced that pop.
+                    case .store, .home: break
                     }
                 }
                 selectedTab = newValue

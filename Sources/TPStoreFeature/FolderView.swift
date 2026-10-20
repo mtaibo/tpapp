@@ -16,14 +16,14 @@ enum StoreViewMode: String {
 struct FolderView: View {
     let folder: StoreFolder
     let storeClient: StoreClient
+    let cache: StoreDirectoryCache
     @ObservedObject var favorites: StoreFavoritesStore
 
     @AppStorage("store.viewMode") private var viewMode: StoreViewMode = .list
 
-    @State private var entries: [FileEntry] = []
     @State private var shares: [TPCore.ShareLink] = []
-    @State private var disk: DiskInfo?
-    @State private var hasLoaded = false
+    /// Set once the first load attempt finished, for folders that weren't cached beforehand.
+    @State private var didAttemptLoad = false
     @State private var loadError: String?
     @State private var actionError: String?
     /// Non-nil while a download/upload/open is in flight; shown as a spinner in the toolbar
@@ -115,6 +115,16 @@ struct FolderView: View {
 
     // MARK: - Content
 
+    /// Straight from the shared cache, so a prefetched folder has its contents on the very first
+    /// frame of the push and slides in whole.
+    private var entries: [FileEntry] {
+        cache.entries(for: folder) ?? []
+    }
+
+    private var hasLoaded: Bool {
+        cache.entries(for: folder) != nil || didAttemptLoad
+    }
+
     @ViewBuilder
     private var content: some View {
         if !hasLoaded {
@@ -199,7 +209,7 @@ struct FolderView: View {
         Group {
             if entry.isDirectory {
                 NavigationLink(value: folder.child(entry.name)) {
-                    FileEntryLabel(entry: entry)
+                    FileEntryLabel(entry: entry, itemCount: cache.itemCount(for: folder.child(entry.name)))
                 }
             } else {
                 Button {
@@ -296,7 +306,7 @@ struct FolderView: View {
                     }
                 }
 
-                if let disk {
+                if let disk = cache.disk {
                     Section("\(formatBytes(disk.used)) of \(formatBytes(disk.total)) used") {}
                 }
             } label: {
@@ -308,20 +318,16 @@ struct FolderView: View {
 
     // MARK: - Loading
 
+    /// Refreshes the listing (shown from the cache meanwhile), then prefetches the subfolders so
+    /// the next folder opens instantly. Disk usage and share links load alongside, not after.
     private func load() async {
+        async let disk: Void = cache.refreshDisk()
+        async let fetchedShares: [TPCore.ShareLink]? = folder.isSharedRoot ? try? await storeClient.shares() : nil
         do {
-            async let listing = storeClient.listDirectory(path: folder.path, location: folder.location)
-            async let fetchedDisk = try? storeClient.diskInfo()
-            let fetched = try await listing
-            entries = fetched.entries.sorted { lhs, rhs in
-                if lhs.isDirectory != rhs.isDirectory { return lhs.isDirectory }
-                return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
-            }
-            if folder.isSharedRoot {
-                shares = try await storeClient.shares()
-            }
-            disk = await fetchedDisk
+            try await cache.load(folder)
             loadError = nil
+        } catch is CancellationError {
+            return
         } catch {
             // A failed refresh keeps the last good listing on screen and just reports it.
             if entries.isEmpty, shares.isEmpty {
@@ -330,7 +336,12 @@ struct FolderView: View {
                 actionError = apiErrorMessage(error)
             }
         }
-        hasLoaded = true
+        if let fetched = await fetchedShares {
+            shares = fetched
+        }
+        didAttemptLoad = true
+        await disk
+        await cache.prefetchChildren(of: folder)
     }
 
     // MARK: - Actions
@@ -351,6 +362,7 @@ struct FolderView: View {
         guard !name.isEmpty, name != entry.name else { return }
         do {
             try await storeClient.rename(path: folder.entryPath(entry.name), newName: name, location: folder.location)
+            if entry.isDirectory { cache.invalidate(folder.child(entry.name)) }
             await load()
         } catch {
             actionError = apiErrorMessage(error)
@@ -360,7 +372,7 @@ struct FolderView: View {
     private func delete(_ entry: FileEntry) async {
         do {
             try await storeClient.delete(path: folder.entryPath(entry.name), location: folder.location)
-            withAnimation { entries.removeAll { $0.id == entry.id } }
+            withAnimation { cache.remove(entry, from: folder) }
             await load()
         } catch {
             actionError = apiErrorMessage(error)
