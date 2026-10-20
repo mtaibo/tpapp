@@ -66,38 +66,46 @@ public struct StoreRootView: View {
     }
 }
 
+/// The top of the Store tab, laid out like the Files app's Browse screen: collapsible
+/// Favorites / Locations / Storage sections in rounded cards, with a large title. The
+/// `.sidebar` list style is what gives sections their disclosure chevron on iPhone.
 struct StoreBrowseView: View {
     let rootPath: String
     let isAdmin: Bool
     let cache: StoreDirectoryCache
     @ObservedObject var favorites: StoreFavoritesStore
 
+    /// Plain `@State`, saved to `UserDefaults` on change: bound straight to `@AppStorage`, the
+    /// change reached the list outside any animation and sections snapped open and shut.
+    @State private var favoritesExpanded = Self.isExpanded("favorites")
+    @State private var locationsExpanded = Self.isExpanded("locations")
+    @State private var storageExpanded = Self.isExpanded("storage")
+
     var body: some View {
         List {
-            Section {
+            Section("Favorites", isExpanded: $favoritesExpanded.animation(.smooth)) {
                 ForEach(favorites.favorites) { favorite in
-                    location(favorite.folder, label: favorite.label, systemImage: "folder")
-                    .swipeActions {
-                        Button("Remove", systemImage: "star.slash") {
-                            favorites.remove(favorite.id)
+                    location(favorite.folder, label: favorite.label, systemImage: Self.symbol(forFavorite: favorite))
+                        .swipeActions {
+                            Button("Remove", systemImage: "star.slash") {
+                                favorites.remove(favorite.id)
+                            }
+                            .tint(.orange)
                         }
-                        .tint(.orange)
-                    }
-                    .contextMenu {
-                        Button("Remove from Favorites", systemImage: "star.slash") {
-                            favorites.remove(favorite.id)
+                        .contextMenu {
+                            Button("Remove from Favorites", systemImage: "star.slash") {
+                                favorites.remove(favorite.id)
+                            }
                         }
-                    }
                 }
-            } header: {
-                Text("Favorites")
-            } footer: {
                 if favorites.favorites.isEmpty {
                     Text("Add a folder from its ••• menu to keep it here.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
             }
 
-            Section("Locations") {
+            Section("Locations", isExpanded: $locationsExpanded.animation(.smooth)) {
                 location(.home(rootPath), label: "Home", systemImage: "house")
                 location(.shared, label: "Shared", systemImage: "person.2")
                 if isAdmin {
@@ -108,7 +116,7 @@ struct StoreBrowseView: View {
 
             // Last, under everything else.
             if let disk = cache.disk {
-                Section("Storage") {
+                Section("Storage", isExpanded: $storageExpanded.animation(.smooth)) {
                     VStack(alignment: .leading, spacing: 8) {
                         ProgressView(value: Double(disk.used), total: Double(max(disk.total, 1)))
                         Text("\(formatBytes(disk.used)) of \(formatBytes(disk.total)) used")
@@ -120,7 +128,14 @@ struct StoreBrowseView: View {
                 }
             }
         }
+        .listStyle(.sidebar)
+        .onChange(of: favoritesExpanded) { _, expanded in Self.setExpanded("favorites", expanded) }
+        .onChange(of: locationsExpanded) { _, expanded in Self.setExpanded("locations", expanded) }
+        .onChange(of: storageExpanded) { _, expanded in Self.setExpanded("storage", expanded) }
         .navigationTitle("Browse")
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.large)
+        #endif
         .task {
             await cache.refreshDisk()
         }
@@ -129,9 +144,26 @@ struct StoreBrowseView: View {
         #endif
     }
 
+    private static func isExpanded(_ section: String) -> Bool {
+        UserDefaults.standard.object(forKey: "store.browse.\(section)Expanded") as? Bool ?? true
+    }
+
+    private static func setExpanded(_ section: String, _ expanded: Bool) {
+        UserDefaults.standard.set(expanded, forKey: "store.browse.\(section)Expanded")
+    }
+
     private func location(_ folder: StoreFolder, label: String, systemImage: String) -> some View {
         NavigationLink(value: folder) {
             Label(label, systemImage: systemImage)
         }
+    }
+
+    /// A favorite wears the same glyph its folder gets in the Files-style icon (Downloads,
+    /// Documents…), or a plain folder.
+    private static func symbol(forFavorite favorite: StoreFavorite) -> String {
+        if favorite.location == .external, favorite.path.split(separator: "/").count == 2, favorite.path.hasPrefix("users/") {
+            return "house"
+        }
+        return FolderIcon.glyph(forFolderNamed: favorite.label) ?? "folder"
     }
 }

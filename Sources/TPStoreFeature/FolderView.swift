@@ -332,6 +332,11 @@ struct FolderView: View {
         Button("Share", systemImage: "link") { sharingEntry = entry }
         Divider()
         if entry.isDirectory {
+            let child = folder.child(entry.name)
+            let isFavorite = favorites.contains(child)
+            Button(isFavorite ? "Remove from Favorites" : "Add to Favorites", systemImage: isFavorite ? "star.slash" : "star") {
+                favorites.toggle(child)
+            }
             Button("Change Icon…", systemImage: "folder.badge.gearshape") { iconPickerEntry = entry }
         }
         Button("Rename", systemImage: "pencil") {
