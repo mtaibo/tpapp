@@ -18,6 +18,8 @@ struct FolderView: View {
     let storeClient: StoreClient
     let cache: StoreDirectoryCache
     @ObservedObject var favorites: StoreFavoritesStore
+    /// Pushes a folder onto the stack; used when a drag spring-loads one of this folder's subfolders.
+    let openFolder: (StoreFolder) -> Void
 
     @AppStorage("store.viewMode") private var viewMode: StoreViewMode = .list
 
@@ -160,31 +162,53 @@ struct FolderView: View {
         }
     }
 
+    /// A lazy stack, not a `List`: on iOS a `List` swallows every drop, so its folder rows could
+    /// never take a dragged item. `swipeActionsContainer()` keeps the rows' swipe actions working.
     private var listContent: some View {
-        List {
-            if !shares.isEmpty {
-                Section("Links") {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                if !shares.isEmpty {
+                    sectionHeader("Links")
                     ForEach(shares) { share in
                         ShareLinkRow(share: share, title: share.path.split(separator: "/").last.map(String.init) ?? share.path) {
                             sharePendingDelete = share
                         }
-                        .listRowSeparator(share.id == shares.first?.id ? .hidden : .automatic, edges: .top)
+                        .padding(.horizontal, Self.rowInset)
+                        .padding(.vertical, 10)
+                        .background(.background)
+                        rowSeparator
                     }
+                    if !entries.isEmpty { sectionHeader("Folders") }
                 }
-            }
-            Section {
+                // No line above the first row, like the Files app: the list starts straight
+                // under the toolbar, with a line under every row.
                 ForEach(entries) { entry in
                     row(for: entry)
-                        // No line above the first row, like the Files app: the list starts
-                        // straight under the toolbar.
-                        .listRowSeparator(entry.id == entries.first?.id ? .hidden : .automatic, edges: .top)
+                    rowSeparator
                 }
-            } header: {
-                if !shares.isEmpty, !entries.isEmpty { Text("Folders") }
             }
         }
-        .listStyle(.plain)
+        .swipeActionsContainer()
+        // Dropping on empty space (or on a file) moves the item into this folder.
+        .folderDropTarget(folder, cache: cache, springLoad: nil) { actionError = $0 }
         .refreshable { await load() }
+    }
+
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.headline)
+            .padding(.horizontal, Self.rowInset)
+            .padding(.top, 12)
+            .padding(.bottom, 4)
+    }
+
+    /// The side margin a plain `List` row had, kept so rows look the same size as before.
+    private static let rowInset: CGFloat = 20
+
+    /// Inset to start under the name, past the icon, like the Files app.
+    private var rowSeparator: some View {
+        Divider()
+            .padding(.leading, Self.rowInset + 48 + 14)
     }
 
     private var iconContent: some View {
@@ -211,6 +235,7 @@ struct FolderView: View {
             }
             .padding()
         }
+        .folderDropTarget(folder, cache: cache, springLoad: nil) { actionError = $0 }
         .refreshable { await load() }
     }
 
@@ -219,14 +244,19 @@ struct FolderView: View {
         Group {
             if entry.isDirectory {
                 NavigationLink(value: folder.child(entry.name)) {
-                    FileEntryLabel(entry: entry, itemCount: cache.itemCount(for: folder.child(entry.name)))
+                    rowLabel(FileEntryLabel(entry: entry, itemCount: cache.itemCount(for: folder.child(entry.name))), isFolder: true)
+                }
+                .buttonStyle(StoreRowButtonStyle())
+                .folderDropTarget(folder.child(entry.name), cache: cache, springLoad: { openFolder(folder.child(entry.name)) }) {
+                    actionError = $0
                 }
             } else {
                 Button {
                     open(entry)
                 } label: {
-                    FileEntryLabel(entry: entry)
+                    rowLabel(FileEntryLabel(entry: entry), isFolder: false)
                 }
+                .buttonStyle(StoreRowButtonStyle())
             }
         }
         .contextMenu { menuItems(for: entry) }
@@ -238,7 +268,24 @@ struct FolderView: View {
             Button("Share", systemImage: "link") { sharingEntry = entry }
                 .tint(.blue)
         }
-        .onDrag { fileItemProvider(for: entry) }
+        .onDrag { StoreDragging.itemProvider(for: entry, in: folder, storeClient: storeClient) }
+    }
+
+    /// A row's full-width body: the label, a chevron for folders, and the row's own padding so the
+    /// pressed and drop-target highlights span the whole width.
+    private func rowLabel(_ label: FileEntryLabel, isFolder: Bool) -> some View {
+        HStack(spacing: 8) {
+            label
+            if isFolder {
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.horizontal, Self.rowInset)
+        .padding(.vertical, 10)
+        .frame(minHeight: 66)
+        .contentShape(.rect)
     }
 
     @ViewBuilder
@@ -247,6 +294,14 @@ struct FolderView: View {
             if entry.isDirectory {
                 NavigationLink(value: folder.child(entry.name)) {
                     FileEntryTile(entry: entry, thumbnailURL: nil)
+                }
+                .folderDropTarget(
+                    folder.child(entry.name),
+                    cache: cache,
+                    highlightShape: AnyShape(RoundedRectangle(cornerRadius: 14)),
+                    springLoad: { openFolder(folder.child(entry.name)) }
+                ) {
+                    actionError = $0
                 }
             } else {
                 Button {
@@ -263,7 +318,7 @@ struct FolderView: View {
         }
         .buttonStyle(.plain)
         .contextMenu { menuItems(for: entry) }
-        .onDrag { fileItemProvider(for: entry) }
+        .onDrag { StoreDragging.itemProvider(for: entry, in: folder, storeClient: storeClient) }
     }
 
     @ViewBuilder
@@ -435,30 +490,7 @@ struct FolderView: View {
 
     private func downloadToTempFile(_ entry: FileEntry) async throws -> URL {
         let data = try await storeClient.download(path: folder.entryPath(entry.name), location: folder.location)
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let url = directory.appendingPathComponent(entry.name)
-        try data.write(to: url)
-        return url
-    }
-
-    /// Lazily downloads the file only once a drop target actually accepts it, mirroring Finder's file-promise drag.
-    private func fileItemProvider(for entry: FileEntry) -> NSItemProvider {
-        let provider = NSItemProvider()
-        guard !entry.isDirectory else { return provider }
-        let type = UTType(filenameExtension: (entry.name as NSString).pathExtension) ?? .data
-        provider.suggestedName = entry.name
-        provider.registerFileRepresentation(forTypeIdentifier: type.identifier, fileOptions: [], visibility: .all) { completion in
-            Task {
-                do {
-                    completion(try await downloadToTempFile(entry), false, nil)
-                } catch {
-                    completion(nil, false, error)
-                }
-            }
-            return nil
-        }
-        return provider
+        return try StoreDragging.writeTemporaryFile(data, named: entry.name)
     }
 
     private func upload(_ urls: [URL]) async {
@@ -500,5 +532,13 @@ struct RawFileDocument: FileDocument {
 
     func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
         FileWrapper(regularFileWithContents: data)
+    }
+}
+
+/// The pressed look of a row outside a `List`: the same gray wash a list row gets when tapped.
+private struct StoreRowButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(configuration.isPressed ? AnyShapeStyle(.fill.tertiary) : AnyShapeStyle(.background))
     }
 }

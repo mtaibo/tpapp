@@ -102,6 +102,33 @@ final class StoreDirectoryCache {
         }
     }
 
+    /// Whether dropping `item` on `folder` would move it anywhere: same storage location, not the
+    /// folder it's already in, and not a folder into itself or one of its own subfolders.
+    func canMove(_ item: StoreDragItem, into folder: StoreFolder) -> Bool {
+        guard item.location == folder.location, item.parentPath != folder.path else { return false }
+        if item.isDirectory, folder.path == item.path || folder.path.hasPrefix(item.path + "/") { return false }
+        return true
+    }
+
+    /// Moves a dragged file or folder into `folder`, taking it out of its old listing right away
+    /// and then refreshing both folders from the server.
+    func move(_ item: StoreDragItem, into folder: StoreFolder) async throws {
+        try await storeClient.move(path: item.path, destDir: folder.path, location: item.location)
+        let source = StoreFolder(location: item.location, path: item.parentPath, title: "")
+        let name = String(item.path.split(separator: "/").last ?? "")
+        listings[Key(source)]?.removeAll { $0.name == name }
+        if item.isDirectory { invalidate(source.child(name)) }
+        async let refreshedSource: Void = refresh(source)
+        async let refreshedTarget: Void = refresh(folder)
+        _ = await (refreshedSource, refreshedTarget)
+    }
+
+    /// Reloads a folder only if it's cached; one nobody has opened yet loads when it's opened.
+    private func refresh(_ folder: StoreFolder) async {
+        guard listings[Key(folder)] != nil else { return }
+        _ = try? await load(folder)
+    }
+
     func remove(_ entry: FileEntry, from folder: StoreFolder) {
         listings[Key(folder)]?.removeAll { $0.id == entry.id }
         if entry.isDirectory { invalidate(folder.child(entry.name)) }

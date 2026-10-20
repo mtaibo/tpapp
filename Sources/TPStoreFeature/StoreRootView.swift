@@ -58,7 +58,9 @@ public struct StoreRootView: View {
         NavigationStack(path: $path) {
             StoreBrowseView(rootPath: rootPath, isAdmin: isAdmin, cache: cache, favorites: favorites)
                 .navigationDestination(for: StoreFolder.self) { folder in
-                    FolderView(folder: folder, storeClient: storeClient, cache: cache, favorites: favorites)
+                    FolderView(folder: folder, storeClient: storeClient, cache: cache, favorites: favorites) { child in
+                        path.append(child)
+                    }
                 }
         }
     }
@@ -73,27 +75,17 @@ struct StoreBrowseView: View {
     var body: some View {
         List {
             Section("Locations") {
-                NavigationLink(value: StoreFolder.home(rootPath)) {
-                    Label("Home", systemImage: "house")
-                }
-                NavigationLink(value: StoreFolder.shared) {
-                    Label("Shared", systemImage: "person.2")
-                }
+                location(.home(rootPath), label: "Home", systemImage: "house")
+                location(.shared, label: "Shared", systemImage: "person.2")
                 if isAdmin {
-                    NavigationLink(value: StoreFolder.disk) {
-                        Label("Disk", systemImage: "internaldrive")
-                    }
-                    NavigationLink(value: StoreFolder.system) {
-                        Label("System", systemImage: "server.rack")
-                    }
+                    location(.disk, label: "Disk", systemImage: "internaldrive")
+                    location(.system, label: "System", systemImage: "server.rack")
                 }
             }
 
             Section {
                 ForEach(favorites.favorites) { favorite in
-                    NavigationLink(value: favorite.folder) {
-                        Label(favorite.label, systemImage: "folder")
-                    }
+                    location(favorite.folder, label: favorite.label, systemImage: "folder")
                     .swipeActions {
                         Button("Remove", systemImage: "star.slash") {
                             favorites.remove(favorite.id)
@@ -134,5 +126,11 @@ struct StoreBrowseView: View {
         #if os(macOS)
         .frame(minWidth: 640, minHeight: 480)
         #endif
+    }
+
+    private func location(_ folder: StoreFolder, label: String, systemImage: String) -> some View {
+        NavigationLink(value: folder) {
+            Label(label, systemImage: systemImage)
+        }
     }
 }
