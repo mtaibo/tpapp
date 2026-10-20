@@ -21,6 +21,33 @@ private final class RedirectBlockingDelegate: NSObject, URLSessionTaskDelegate {
     }
 }
 
+/// Blocks redirects like `RedirectBlockingDelegate`, and also hangs the download task's own
+/// progress under a caller's `Progress`, so whoever waits on the file (e.g. another app a file
+/// was dragged to) sees it advance — and can cancel it.
+private final class FileDownloadDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    private let progress: Progress?
+
+    init(progress: Progress?) {
+        self.progress = progress
+    }
+
+    func urlSession(_ session: URLSession, didCreateTask task: URLSessionTask) {
+        guard let progress else { return }
+        progress.addChild(task.progress, withPendingUnitCount: progress.totalUnitCount)
+        progress.cancellationHandler = { [weak task] in task?.cancel() }
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
+    }
+}
+
 public struct HTTPClient: Sendable {
     public let baseURL: URL
     private let session: URLSession
@@ -84,6 +111,26 @@ public struct HTTPClient: Sendable {
         try await execute(path: path, method: "GET", query: query, body: Optional<EmptyBody>.none)
     }
 
+    /// Raw binary GET streamed straight to a file instead of into memory, for big downloads.
+    /// Returns a temporary file the caller must move or delete.
+    public func downloadFile(_ path: String, query: [String: String] = [:], progress: Progress? = nil) async throws -> URL {
+        let request = makeRequest(path: path, method: "GET", query: query, contentType: nil, body: nil)
+        let fileURL: URL
+        let response: URLResponse
+        do {
+            (fileURL, response) = try await session.download(for: request, delegate: FileDownloadDelegate(progress: progress))
+        } catch {
+            throw APIError.transport(error.localizedDescription)
+        }
+        do {
+            try Self.validate(response, data: { (try? Data(contentsOf: fileURL)) ?? Data() })
+        } catch {
+            try? FileManager.default.removeItem(at: fileURL)
+            throw error
+        }
+        return fileURL
+    }
+
     public struct UploadFile: Sendable {
         public let fieldName: String
         public let filename: String
@@ -140,6 +187,20 @@ public struct HTTPClient: Sendable {
     }
 
     private func executeRaw(path: String, method: String, query: [String: String], contentType: String?, body: Data?) async throws -> Data {
+        let request = makeRequest(path: path, method: method, query: query, contentType: contentType, body: body)
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request, delegate: RedirectBlockingDelegate())
+        } catch {
+            throw APIError.transport(error.localizedDescription)
+        }
+        try Self.validate(response, data: { data })
+        return data
+    }
+
+    private func makeRequest(path: String, method: String, query: [String: String], contentType: String?, body: Data?) -> URLRequest {
         var components = URLComponents(url: baseURL.appending(path: path), resolvingAgainstBaseURL: false)!
         if !query.isEmpty {
             components.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) }
@@ -156,15 +217,11 @@ public struct HTTPClient: Sendable {
         if let contentType {
             request.setValue(contentType, forHTTPHeaderField: "Content-Type")
         }
+        return request
+    }
 
-        let data: Data
-        let response: URLResponse
-        do {
-            (data, response) = try await session.data(for: request, delegate: RedirectBlockingDelegate())
-        } catch {
-            throw APIError.transport(error.localizedDescription)
-        }
-
+    /// `data` is only read for a failed response's error detail.
+    private static func validate(_ response: URLResponse, data: () -> Data) throws {
         guard let http = response as? HTTPURLResponse else {
             throw APIError.invalidResponse
         }
@@ -173,9 +230,8 @@ public struct HTTPClient: Sendable {
             throw APIError.sessionExpired
         }
         guard (200..<300).contains(http.statusCode) else {
-            throw APIError.server(status: http.statusCode, message: Self.errorDetail(from: data))
+            throw APIError.server(status: http.statusCode, message: errorDetail(from: data()))
         }
-        return data
     }
 
     #if os(iOS)

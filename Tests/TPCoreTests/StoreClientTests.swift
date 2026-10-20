@@ -116,6 +116,33 @@ extension TPCoreTestsRoot {
         #expect(data == payload)
     }
 
+    @Test func streamsDownloadToFileWithProgress() async throws {
+        let payload = Data(repeating: 7, count: 64 * 1024)
+        StubURLProtocol.handler = { request in
+            #expect(request.url?.path == "/api/files/download-zip")
+            #expect(self.query(request)["path"] == "docs")
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Length": "\(payload.count)"])!
+            return (response, payload)
+        }
+
+        let progress = Progress(totalUnitCount: 100)
+        let file = try await makeClient().downloadFile(path: "docs", asZip: true, progress: progress)
+        defer { try? FileManager.default.removeItem(at: file) }
+
+        #expect(try Data(contentsOf: file) == payload)
+        #expect(progress.fractionCompleted == 1)
+    }
+
+    @Test func failedFileDownloadThrowsAndLeavesNoFile() async throws {
+        StubURLProtocol.handler = { request in
+            jsonResponse(request.url!, status: 404, json: #"{"detail":"Source not found"}"#)
+        }
+
+        await #expect(throws: APIError.server(status: 404, message: "Source not found")) {
+            try await makeClient().downloadFile(path: "missing.mov")
+        }
+    }
+
     @Test func uploadsFileAsMultipart() async throws {
         let fileData = Data("file-contents".utf8)
         StubURLProtocol.handler = { request in

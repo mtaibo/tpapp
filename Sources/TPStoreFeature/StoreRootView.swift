@@ -74,15 +74,6 @@ struct StoreBrowseView: View {
 
     var body: some View {
         List {
-            Section("Locations") {
-                location(.home(rootPath), label: "Home", systemImage: "house")
-                location(.shared, label: "Shared", systemImage: "person.2")
-                if isAdmin {
-                    location(.disk, label: "Disk", systemImage: "internaldrive")
-                    location(.system, label: "System", systemImage: "server.rack")
-                }
-            }
-
             Section {
                 ForEach(favorites.favorites) { favorite in
                     location(favorite.folder, label: favorite.label, systemImage: "folder")
@@ -106,6 +97,16 @@ struct StoreBrowseView: View {
                 }
             }
 
+            Section("Locations") {
+                location(.home(rootPath), label: "Home", systemImage: "house")
+                location(.shared, label: "Shared", systemImage: "person.2")
+                if isAdmin {
+                    location(.disk, label: "Disk", systemImage: "internaldrive")
+                    location(.system, label: "System", systemImage: "server.rack")
+                }
+            }
+
+            // Last, under everything else.
             if let disk = cache.disk {
                 Section("Storage") {
                     VStack(alignment: .leading, spacing: 8) {
@@ -119,7 +120,7 @@ struct StoreBrowseView: View {
                 }
             }
         }
-        .navigationTitle("Store")
+        .navigationTitle("Browse")
         .task {
             await cache.refreshDisk()
         }

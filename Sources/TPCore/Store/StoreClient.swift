@@ -64,6 +64,16 @@ public struct StoreClient: Sendable {
         try await client.getData("/api/files/download-zip", query: ["path": path, "location": location.rawValue])
     }
 
+    /// A file (or, for a folder, a zip of it) streamed to a temporary file the caller must move
+    /// or delete, reporting into `progress` as it goes.
+    public func downloadFile(path: String, location: StoreLocation = .external, asZip: Bool = false, progress: Progress? = nil) async throws -> URL {
+        try await client.downloadFile(
+            asZip ? "/api/files/download-zip" : "/api/files/download",
+            query: ["path": path, "location": location.rawValue],
+            progress: progress
+        )
+    }
+
     public func thumbnailURL(path: String, location: StoreLocation = .external, size: Int = 160) -> URL {
         var components = URLComponents(url: client.baseURL.appending(path: "/api/files/thumbnail"), resolvingAgainstBaseURL: false)!
         components.queryItems = [

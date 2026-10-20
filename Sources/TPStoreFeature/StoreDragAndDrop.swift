@@ -2,6 +2,9 @@ import CoreTransferable
 import SwiftUI
 import TPCore
 import UniformTypeIdentifiers
+#if os(iOS)
+import UIKit
+#endif
 
 extension UTType {
     /// A file or folder dragged inside the app; declared in the app's Info.plist.
@@ -43,22 +46,41 @@ enum StoreDragging {
             filename = entry.name
         }
         provider.suggestedName = filename
+        // Only runs once the other app accepts the drop. On iPhone that app is in front by then and
+        // this one is in the background, where iOS freezes its networking within seconds — which
+        // left the other app "loading" forever. So the download asks for background time, streams
+        // to disk instead of memory, and reports real progress the other app can show and cancel.
         provider.registerFileRepresentation(forTypeIdentifier: type.identifier, fileOptions: [], visibility: .all) { completion in
+            let progress = Progress(totalUnitCount: 100)
             Task {
+                let activity = await BackgroundActivity.begin(named: "Drag \(filename)")
+                defer { Task { await activity.end() } }
                 do {
-                    let data = entry.isDirectory
-                        ? try await storeClient.downloadZip(path: path, location: location)
-                        : try await storeClient.download(path: path, location: location)
-                    completion(try writeTemporaryFile(data, named: filename), false, nil)
+                    let downloaded = try await storeClient.downloadFile(
+                        path: path,
+                        location: location,
+                        asZip: entry.isDirectory,
+                        progress: progress
+                    )
+                    completion(try moveToTemporaryFile(downloaded, named: filename), false, nil)
                 } catch {
                     completion(nil, false, error)
                 }
             }
-            return nil
+            return progress
         }
 
         provider.register(StoreDragItem(location: location, path: path, isDirectory: entry.isDirectory))
         return provider
+    }
+
+    /// Gives a downloaded file its real name, in a folder of its own so names never clash.
+    static func moveToTemporaryFile(_ file: URL, named name: String) throws -> URL {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent(name)
+        try FileManager.default.moveItem(at: file, to: url)
+        return url
     }
 
     static func writeTemporaryFile(_ data: Data, named name: String) throws -> URL {
@@ -136,5 +158,32 @@ extension View {
         onError: @escaping (String) -> Void
     ) -> some View {
         modifier(FolderDropTarget(folder: folder, cache: cache, springLoad: springLoad, highlightShape: highlightShape, onError: onError))
+    }
+}
+
+/// Keeps the app running in the background (iOS grants about 30 seconds) while it finishes
+/// something another app is waiting on. A no-op on macOS, where apps aren't suspended.
+@MainActor
+final class BackgroundActivity {
+    #if os(iOS)
+    private var identifier: UIBackgroundTaskIdentifier = .invalid
+    #endif
+
+    static func begin(named name: String) -> BackgroundActivity {
+        let activity = BackgroundActivity()
+        #if os(iOS)
+        activity.identifier = UIApplication.shared.beginBackgroundTask(withName: name) { [weak activity] in
+            activity?.end()
+        }
+        #endif
+        return activity
+    }
+
+    func end() {
+        #if os(iOS)
+        guard identifier != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(identifier)
+        identifier = .invalid
+        #endif
     }
 }
