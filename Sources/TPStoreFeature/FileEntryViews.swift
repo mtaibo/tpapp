@@ -68,8 +68,14 @@ struct FolderIcon: View {
         self.glyph = glyph
     }
 
-    init(name: String, isShared: Bool = false) {
-        self.glyph = isShared ? "person.2.fill" : Self.glyph(forFolderNamed: name)
+    /// A custom icon picked for the folder wins; otherwise shared folders get people and
+    /// well-known names their Files glyph.
+    init(name: String, iconName: String? = nil, isShared: Bool = false) {
+        if let iconName, let symbol = FolderIconCatalog.symbol(for: iconName) {
+            self.glyph = symbol
+        } else {
+            self.glyph = isShared ? "person.2.fill" : Self.glyph(forFolderNamed: name)
+        }
     }
 
     private static let back = Color(red: 0.36, green: 0.66, blue: 0.89)
@@ -144,7 +150,7 @@ private struct EntryIcon: View {
 
     var body: some View {
         if entry.isDirectory || entry.type == .shareLink {
-            FolderIcon(name: entry.name, isShared: entry.type == .shareLink)
+            FolderIcon(name: entry.name, iconName: entry.iconName, isShared: entry.type == .shareLink)
         } else {
             let icon = iconInfo(for: entry)
             Image(systemName: icon.symbol)

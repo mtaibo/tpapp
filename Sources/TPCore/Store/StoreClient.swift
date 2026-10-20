@@ -41,6 +41,19 @@ public struct StoreClient: Sendable {
         let _: [String: String] = try await client.delete("/api/files", query: ["path": path, "location": location.rawValue])
     }
 
+    /// A folder's custom icon, by the web frontend's icon name (e.g. "Briefcase"), so both
+    /// clients show the same one. `nil` goes back to the default folder.
+    public func setFolderIcon(path: String, location: StoreLocation = .external, iconName: String?) async throws {
+        if let iconName {
+            let _: [String: Bool] = try await client.put(
+                "/api/files/icon",
+                body: IconBody(path: path, location: location.rawValue, iconName: iconName)
+            )
+        } else {
+            let _: [String: Bool] = try await client.delete("/api/files/icon", query: ["path": path, "location": location.rawValue])
+        }
+    }
+
     // MARK: - Download / Upload
 
     public func download(path: String, location: StoreLocation = .external) async throws -> Data {
@@ -121,6 +134,12 @@ public struct StoreClient: Sendable {
 private struct PathBody: Encodable {
     let path: String
     let location: String
+}
+
+private struct IconBody: Encodable {
+    let path: String
+    let location: String
+    let iconName: String
 }
 
 private struct RenameBody: Encodable {

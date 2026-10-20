@@ -37,6 +37,7 @@ struct FolderView: View {
     @State private var entryPendingDelete: FileEntry?
     @State private var sharePendingDelete: TPCore.ShareLink?
     @State private var sharingEntry: FileEntry?
+    @State private var iconPickerEntry: FileEntry?
     @State private var isImportingFiles = false
     @State private var exportDocument: RawFileDocument?
     @State private var exportFilename = ""
@@ -107,6 +108,11 @@ struct FolderView: View {
             .sheet(item: $sharingEntry) { entry in
                 ShareSheetView(entry: entry, folder: folder, storeClient: storeClient) {
                     if folder.isSharedRoot { Task { await load() } }
+                }
+            }
+            .sheet(item: $iconPickerEntry) { entry in
+                FolderIconPicker(entry: entry, folder: folder, storeClient: storeClient) {
+                    Task { try? await cache.load(folder) }
                 }
             }
             .quickLookPreview($previewURL)
@@ -270,6 +276,9 @@ struct FolderView: View {
         }
         Button("Share", systemImage: "link") { sharingEntry = entry }
         Divider()
+        if entry.isDirectory {
+            Button("Change Icon…", systemImage: "folder.badge.gearshape") { iconPickerEntry = entry }
+        }
         Button("Rename", systemImage: "pencil") {
             renameDraft = entry.name
             renamingEntry = entry

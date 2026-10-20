@@ -64,6 +64,11 @@ public struct HTTPClient: Sendable {
         return try decode(data)
     }
 
+    public func put<Body: Encodable, Response: Decodable>(_ path: String, body: Body) async throws -> Response {
+        let data = try await execute(path: path, method: "PUT", query: [:], body: body)
+        return try decode(data)
+    }
+
     public func delete<Response: Decodable>(_ path: String, query: [String: String] = [:]) async throws -> Response {
         let data = try await execute(path: path, method: "DELETE", query: query, body: Optional<EmptyBody>.none)
         return try decode(data)
