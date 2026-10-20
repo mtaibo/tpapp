@@ -36,7 +36,7 @@ Four tabs, each backed by one of my services:
 <td width="50%" valign="top">
 
 ### 🗂️ Store
-Files-style browser for my storage on [tpstore](https://github.com/mtaibo/tpstore): folders, uploads, rename, move, delete, ZIP download, favorites, thumbnails and public share links. Shared folders and (for admins) disk usage live here too.
+Files-style browser for my storage on [tpstore](https://github.com/mtaibo/tpstore): folders, uploads, rename, move, delete, ZIP download, favorites, thumbnails and public share links. Shared folders and disk usage live here too.
 
 **`TPStoreFeature`**
 

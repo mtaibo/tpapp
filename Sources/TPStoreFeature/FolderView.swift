@@ -9,7 +9,7 @@ enum StoreViewMode: String {
     case list, icons
 }
 
-/// Any folder in the store — Home, Shared, a favorite or a raw disk path. Replaces the old
+/// Any folder in the store — Home, Shared or a favorite. Replaces the old
 /// `FileBrowserView`/`SharedView` pair, which were ~70% the same code with their own hand-drawn
 /// top bars and back/forward history; navigation is now the system `NavigationStack`, so the
 /// back button, swipe-back and title all come for free.

@@ -71,8 +71,7 @@ struct RootView: View {
             Tab("Store", systemImage: "folder", value: AppTab.store) {
                 StoreRootView(
                     storeClient: storeClient,
-                    rootPath: "users/\(profile.email)",
-                    isAdmin: profile.isAdmin
+                    rootPath: "users/\(profile.email)"
                 )
             }
             Tab("Photos", systemImage: "photo.on.rectangle", value: AppTab.photos) {

@@ -42,6 +42,6 @@ struct StoreDragTests {
         #expect(!cache.canMove(dir, into: home.child("a")))            // into itself
         #expect(!cache.canMove(dir, into: home.child("a").child("x"))) // into its own subfolder
         #expect(!cache.canMove(dir, into: home))                       // already there
-        #expect(!cache.canMove(file, into: StoreFolder.system))        // other location
+        #expect(!cache.canMove(file, into: StoreFolder(location: .server, path: "", title: "")))  // other location
     }
 }

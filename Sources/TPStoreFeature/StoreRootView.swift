@@ -15,8 +15,6 @@ struct StoreFolder: Hashable {
     }
 
     static let shared = StoreFolder(location: .external, path: sharedPath, title: "Shared")
-    static let disk = StoreFolder(location: .external, path: "", title: "Disk")
-    static let system = StoreFolder(location: .server, path: "", title: "System")
 
     /// The shared folder's root also lists every share link, on top of its subfolders.
     var isSharedRoot: Bool { location == .external && path == Self.sharedPath }
@@ -31,7 +29,7 @@ struct StoreFolder: Hashable {
 }
 
 /// The Store tab: a Files-style stack that opens straight into the user's Home folder, with a
-/// "Browse" level above it for Shared, favorites and (for admins) the raw disk and system roots.
+/// "Browse" level above it for Shared and favorites.
 /// Shared lives here now instead of in its own tab.
 ///
 /// Re-tapping the Store tab is left to the system, which pops the stack to Browse like the Files
@@ -40,23 +38,21 @@ struct StoreFolder: Hashable {
 public struct StoreRootView: View {
     let storeClient: StoreClient
     let rootPath: String
-    let isAdmin: Bool
 
     @StateObject private var favorites = StoreFavoritesStore()
     @State private var cache: StoreDirectoryCache
     @State private var path: [StoreFolder]
 
-    public init(storeClient: StoreClient, rootPath: String, isAdmin: Bool = false) {
+    public init(storeClient: StoreClient, rootPath: String) {
         self.storeClient = storeClient
         self.rootPath = rootPath
-        self.isAdmin = isAdmin
         _cache = State(initialValue: StoreDirectoryCache(storeClient: storeClient))
         _path = State(initialValue: [.home(rootPath)])
     }
 
     public var body: some View {
         NavigationStack(path: $path) {
-            StoreBrowseView(rootPath: rootPath, isAdmin: isAdmin, cache: cache, favorites: favorites) { folder in
+            StoreBrowseView(rootPath: rootPath, cache: cache, favorites: favorites) { folder in
                 path.append(folder)
             }
                 .navigationDestination(for: StoreFolder.self) { folder in
@@ -76,7 +72,6 @@ public struct StoreRootView: View {
 /// plain stack also lets the rows take dragged files (a `List` swallows drops on iOS).
 struct StoreBrowseView: View {
     let rootPath: String
-    let isAdmin: Bool
     let cache: StoreDirectoryCache
     @ObservedObject var favorites: StoreFavoritesStore
     /// Pushes a folder; used when a drag spring-loads one of the rows.
@@ -127,11 +122,9 @@ struct StoreBrowseView: View {
 
                 BrowseSection("Locations", isExpanded: $locationsExpanded) {
                     row(.home(rootPath), label: "Home", systemImage: "house", isLast: false)
-                    row(.shared, label: "Shared", systemImage: "person.2", isLast: !isAdmin)
-                    if isAdmin {
-                        row(.disk, label: "Disk", systemImage: "internaldrive", isLast: false)
-                        row(.system, label: "System", systemImage: "server.rack", isLast: true)
-                    }
+                    // Only your own folder and Shared: the server no longer lets anyone, admins
+                    // included, browse the whole disk or the Pi's own filesystem.
+                    row(.shared, label: "Shared", systemImage: "person.2", isLast: true)
                 }
 
                 // Last, under everything else.
