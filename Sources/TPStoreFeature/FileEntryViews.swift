@@ -161,9 +161,9 @@ struct FileEntryLabel: View {
     var itemCount: Int?
 
     var body: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 12) {
             EntryIcon(entry: entry, symbolFont: .title)
-                .frame(width: 46, height: 40)
+                .frame(width: 40, height: 34)
             VStack(alignment: .leading, spacing: 2) {
                 Text(entry.name)
                     .font(.body)
@@ -171,13 +171,13 @@ struct FileEntryLabel: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Text(subtitle(for: entry, itemCount: itemCount))
-                    .font(.subheadline)
+                    .font(.footnote)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
             Spacer(minLength: 0)
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, 3)
         .contentShape(.rect)
     }
 }
@@ -228,7 +228,7 @@ struct ShareLinkRow: View {
     @State private var didCopy = false
 
     var body: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 12) {
             Group {
                 if share.isFile {
                     Image(systemName: "doc.fill")
@@ -238,7 +238,7 @@ struct ShareLinkRow: View {
                     FolderIcon(name: title)
                 }
             }
-            .frame(width: 46, height: 40)
+            .frame(width: 40, height: 34)
             VStack(alignment: .leading, spacing: 4) {
                 Text(title)
                     .lineLimit(1)

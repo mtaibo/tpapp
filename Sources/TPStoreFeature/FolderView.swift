@@ -162,12 +162,16 @@ struct FolderView: View {
                         ShareLinkRow(share: share, title: share.path.split(separator: "/").last.map(String.init) ?? share.path) {
                             sharePendingDelete = share
                         }
+                        .listRowSeparator(share.id == shares.first?.id ? .hidden : .automatic, edges: .top)
                     }
                 }
             }
             Section {
                 ForEach(entries) { entry in
                     row(for: entry)
+                        // No line above the first row, like the Files app: the list starts
+                        // straight under the toolbar.
+                        .listRowSeparator(entry.id == entries.first?.id ? .hidden : .automatic, edges: .top)
                 }
             } header: {
                 if !shares.isEmpty, !entries.isEmpty { Text("Folders") }
@@ -194,7 +198,7 @@ struct FolderView: View {
                 }
                 .padding(.horizontal)
             }
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 96, maximum: 150), spacing: 16)], spacing: 20) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 88, maximum: 136), spacing: 14)], spacing: 18) {
                 ForEach(entries) { entry in
                     tile(for: entry)
                 }
